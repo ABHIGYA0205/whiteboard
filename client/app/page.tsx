@@ -47,7 +47,7 @@ export default function HomePage() {
             <div style={{ width: '32px', height: '32px', background: 'linear-gradient(135deg, #6965db, #ff6b6b)', borderRadius: '8px' }}></div>
             Whiteboard
           </div>
-          <button style={{ background: 'transparent', color: '#a0aec0', border: 'none', cursor: 'pointer', fontSize: '1rem', fontWeight: 500 }} onClick={() => window.open('https://github.com/google/antigravity', '_blank')}>
+          <button style={{ background: 'transparent', color: '#a0aec0', border: 'none', cursor: 'pointer', fontSize: '1rem', fontWeight: 500 }} onClick={() => window.open('https://github.com/ABHIGYA0205/whiteboard', '_blank')}>
             About Project
           </button>
         </header>
@@ -55,7 +55,7 @@ export default function HomePage() {
         {/* Hero Section */}
         <section style={{ textAlign: 'center', margin: '4rem 0 6rem 0' }}>
           <div style={{ display: 'inline-block', padding: '0.5rem 1rem', background: 'rgba(105, 101, 219, 0.1)', color: '#a5a6f6', borderRadius: '20px', fontSize: '0.875rem', fontWeight: 600, marginBottom: '1.5rem', border: '1px solid rgba(105, 101, 219, 0.2)' }}>
-            ✨ Version 2.0 is now live
+            ✨ Version 1.0 is now live
           </div>
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 5rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '1.5rem', color: '#fff' }}>
             The infinite canvas for <br/>
