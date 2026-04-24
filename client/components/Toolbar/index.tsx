@@ -4,7 +4,7 @@ import { TOOL_OPTIONS } from "@/components/Canvas/tools";
 import { exportSelectionToImage, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
 import { enhanceSketch } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   MousePointer2,
   Hand,
