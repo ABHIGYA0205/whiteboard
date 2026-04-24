@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.boardRouter = void 0;
+const express_1 = require("express");
+const board_controller_1 = require("../controllers/board.controller");
+exports.boardRouter = (0, express_1.Router)();
+exports.boardRouter.post("/", board_controller_1.createBoardController);
+exports.boardRouter.post("/clean", board_controller_1.cleanBoardController);
+exports.boardRouter.get("/:id", board_controller_1.getBoardController);
+exports.boardRouter.put("/:id", board_controller_1.updateBoardController);
