@@ -35,6 +35,17 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   image: <ImageIcon size={18} />
 };
 
+const COLORS = [
+  { name: "White", value: "#ececf1" },
+  { name: "Red", value: "#ff4444" },
+  { name: "Orange", value: "#ff9500" },
+  { name: "Yellow", value: "#ffcc00" },
+  { name: "Green", value: "#34c759" },
+  { name: "Blue", value: "#007aff" },
+  { name: "Purple", value: "#af52de" },
+  { name: "Pink", value: "#ff2d55" }
+];
+
 export function Toolbar() {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
@@ -52,9 +63,13 @@ export function Toolbar() {
     return () => clearInterval(interval);
   }, [isEnhancing]);
 
+  const strokeColor = useBoardStore((state) => state.strokeColor);
+  const setStrokeColor = useBoardStore((state) => state.setStrokeColor);
+  const selectedElementId = useBoardStore((state) => state.selectedElementId);
   const tool = useBoardStore((state) => state.tool);
   const setTool = useBoardStore((state) => state.setTool);
   const elements = useBoardStore((state) => state.elements);
+  const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
   const isLocked = useBoardStore((state) => state.isLocked);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
@@ -137,6 +152,18 @@ export function Toolbar() {
     }
   };
 
+  const handleColorChange = (color: string) => {
+    setStrokeColor(color);
+    
+    if (selectedElementId) {
+      const nextElements = elements.map((el) => 
+        el.id === selectedElementId ? { ...el, strokeColor: color } : el
+      );
+      setElements(nextElements);
+      commitElements(nextElements);
+    }
+  };
+
   return (
     <>
       <nav className="top-toolbar">
@@ -161,6 +188,28 @@ export function Toolbar() {
             <span className="tool-shortcut">{option.shortcut}</span>
           </button>
         ))}
+
+        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+
+        <div className="color-picker-container">
+          {COLORS.map((c) => (
+            <button
+              key={c.value}
+              className={`color-swatch ${strokeColor === c.value ? "active" : ""}`}
+              style={{ backgroundColor: c.value }}
+              onClick={() => handleColorChange(c.value)}
+              title={c.name}
+            />
+          ))}
+          <div className="color-divider" />
+          <input 
+            type="color" 
+            className="custom-color-input" 
+            value={strokeColor.startsWith('#') ? strokeColor : '#ffffff'} 
+            onChange={(e) => handleColorChange(e.target.value)}
+            title="Custom Color"
+          />
+        </div>
 
         <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
 

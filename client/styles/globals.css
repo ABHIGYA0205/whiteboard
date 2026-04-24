@@ -107,6 +107,66 @@ button {
   opacity: 0.5;
 }
 
+.color-picker-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.color-swatch:hover {
+  transform: scale(1.2);
+  z-index: 10;
+}
+
+.color-swatch.active {
+  border-color: #fff;
+  transform: scale(1.1);
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+.color-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--panel-border);
+  margin: 0 4px;
+}
+
+.custom-color-input {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.2s ease;
+}
+
+.custom-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.custom-color-input::-webkit-color-swatch {
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+
+.custom-color-input:hover {
+  transform: scale(1.2);
+}
+
 /* ──────── Sidebar ──────── */
 
 .sidebar-trigger {

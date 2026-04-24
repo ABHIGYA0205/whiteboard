@@ -269,7 +269,7 @@ export function useCanvas({
     collaboration.emitCursor({
       x: point.x,
       y: point.y,
-      color: "#ef4444"
+      color: strokeColor
     });
 
     const interaction = interactionRef.current;
