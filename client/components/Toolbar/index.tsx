@@ -37,7 +37,19 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
 export function Toolbar() {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
-  
+  const [timer, setTimer] = useState(0);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isEnhancing) {
+      setTimer(30);
+      interval = setInterval(() => {
+        setTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isEnhancing]);
+
   const tool = useBoardStore((state) => state.tool);
   const setTool = useBoardStore((state) => state.setTool);
   const elements = useBoardStore((state) => state.elements);
@@ -156,6 +168,48 @@ export function Toolbar() {
       >
         <Sparkles size={18} />
       </button>
+
+      {isEnhancing && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          background: 'rgba(23, 23, 23, 0.8)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(105, 101, 219, 0.3)',
+          padding: '16px 20px',
+          borderRadius: '16px',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          width: '240px',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Generating Image</span>
+            <span style={{ fontSize: '12px', color: '#a5a6f6', fontWeight: 700 }}>~{timer}s</span>
+          </div>
+          <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ 
+              width: `${((30 - timer) / 30) * 100}%`, 
+              height: '100%', 
+              background: 'linear-gradient(90deg, #6965db, #ff6b6b)',
+              transition: 'width 1s linear'
+            }} />
+          </div>
+          <p style={{ margin: 0, fontSize: '11px', color: '#9ba1b0' }}>
+            Our AI models are refining your sketch into a professional illustration.
+          </p>
+        </div>
+      )}
+
+      {isEnhancing && (
+        <div className="status-banner" style={{ background: 'rgba(105, 101, 219, 0.9)', color: '#fff', borderColor: 'rgba(255, 255, 255, 0.2)' }}>
+          <Sparkles size={14} className="enhancing" style={{ marginRight: '8px' }} />
+          AI is enhancing your sketch...
+        </div>
+      )}
 
       {enhanceError && (
         <div className="status-banner">

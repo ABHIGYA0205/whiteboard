@@ -140,17 +140,20 @@ export function useCanvas({
       return;
     }
 
+    const currentElements = elementsRef.current;
+    const currentViewport = viewportRef.current;
     const ratio = devicePixelRatioRef.current;
+
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#010409";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     context.save();
-    context.translate(viewport.x, viewport.y);
-    context.scale(viewport.zoom, viewport.zoom);
-    drawGrid(context, canvas.width / ratio, canvas.height / ratio, viewport);
-    elements.forEach((element) =>
+    context.translate(currentViewport.x, currentViewport.y);
+    context.scale(currentViewport.zoom, currentViewport.zoom);
+    drawGrid(context, canvas.width / ratio, canvas.height / ratio, currentViewport);
+    currentElements.forEach((element) =>
       drawElement(
         context,
         element,
