@@ -410,26 +410,10 @@ export function useCanvas({
   };
 
   function eraseAtPoint(point: Point) {
-    const liveElements = useBoardStore.getState().elements;
-    const hoveredElement = [...liveElements]
-      .reverse()
-      .find((element) => hitTestElement(point, element));
-
-    if (!hoveredElement) {
-      return;
+    const nextElements = useBoardStore.getState().eraseAtPoint(point, hitTestElement);
+    if (nextElements) {
+      collaboration.emitReplace?.(nextElements);
     }
-
-    const nextElements = liveElements.filter(
-      (element) => element.id !== hoveredElement.id
-    );
-
-    if (nextElements.length === liveElements.length) {
-      return;
-    }
-
-    setElements(nextElements);
-    selectElement(null);
-    collaboration.emitReplace?.(nextElements);
   }
 }
 

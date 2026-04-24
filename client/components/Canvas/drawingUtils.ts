@@ -209,9 +209,18 @@ export function hitTestElement(
     ) < 8;
   }
 
-  return element.points.some(
-    (candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < 8
-  );
+  if (element.type === "pencil") {
+    const threshold = 12;
+    return element.points.some((p1, i) => {
+      const p2 = element.points[i + 1];
+      if (!p2) {
+        return Math.hypot(p1.x - point.x, p1.y - point.y) < threshold;
+      }
+      return distanceToSegment(point, p1, p2) < threshold;
+    });
+  }
+
+  return false;
 }
 
 export function getResizeHandleAtPoint(

@@ -18,7 +18,8 @@ import {
   Sparkles,
   Lock,
   Diamond,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Trash2
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -38,6 +39,7 @@ export function Toolbar() {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [timer, setTimer] = useState(0);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -56,6 +58,7 @@ export function Toolbar() {
   const commitElements = useBoardStore((state) => state.commitElements);
   const isLocked = useBoardStore((state) => state.isLocked);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
+  const clearBoard = useBoardStore((state) => state.clearBoard);
 
   const handleEnhance = async () => {
     // Gather all pencil/shape elements (the sketch)
@@ -135,48 +138,86 @@ export function Toolbar() {
   };
 
   return (
-    <nav className="top-toolbar">
-      <button 
-        className={`tool-button ${isLocked ? "active" : ""}`} 
-        title={isLocked ? "Unlock Canvas" : "Lock Canvas"}
-        onClick={() => setIsLocked(!isLocked)}
-      >
-        <Lock size={16} />
-      </button>
-      
-      <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
-
-      {TOOL_OPTIONS.map((option) => (
-        <button
-          className={`tool-button ${tool === option.id ? "active" : ""}`}
-          key={option.id}
-          onClick={() => setTool(option.id)}
-          title={option.label}
+    <>
+      <nav className="top-toolbar">
+        <button 
+          className={`tool-button ${isLocked ? "active" : ""}`} 
+          title={isLocked ? "Unlock Canvas" : "Lock Canvas"}
+          onClick={() => setIsLocked(!isLocked)}
         >
-          {TOOL_ICONS[option.id]}
-          <span className="tool-shortcut">{option.shortcut}</span>
+          <Lock size={16} />
         </button>
-      ))}
+        
+        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
 
-      <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+        {TOOL_OPTIONS.map((option) => (
+          <button
+            className={`tool-button ${tool === option.id ? "active" : ""}`}
+            key={option.id}
+            onClick={() => setTool(option.id)}
+            title={option.label}
+          >
+            {TOOL_ICONS[option.id]}
+            <span className="tool-shortcut">{option.shortcut}</span>
+          </button>
+        ))}
 
-      <button 
-        className={`tool-button ai-button ${isEnhancing ? "enhancing" : ""}`}
-        onClick={handleEnhance}
-        disabled={isEnhancing}
-        title="Enhance with AI"
-      >
-        <Sparkles size={18} />
-      </button>
+        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+
+        <button 
+          className={`tool-button ai-button ${isEnhancing ? "enhancing" : ""}`}
+          onClick={handleEnhance}
+          disabled={isEnhancing}
+          title="Enhance with AI"
+        >
+          <Sparkles size={18} />
+        </button>
+
+        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+
+        <button 
+          className="tool-button"
+          onClick={() => {
+            if (showClearConfirm) {
+              clearBoard();
+              setShowClearConfirm(false);
+            } else {
+              setShowClearConfirm(true);
+              setTimeout(() => setShowClearConfirm(false), 3000);
+            }
+          }}
+          title="Clear Canvas"
+          style={{ width: showClearConfirm ? '60px' : '36px', transition: 'width 0.2s ease' }}
+        >
+          {showClearConfirm ? (
+            <span style={{ fontSize: '10px', color: '#ff4444', fontWeight: 800 }}>SURE?</span>
+          ) : (
+            <Trash2 size={18} color="#ff4444" />
+          )}
+        </button>
+
+        {isEnhancing && (
+          <div className="status-banner" style={{ background: 'rgba(105, 101, 219, 0.9)', color: '#fff', borderColor: 'rgba(255, 255, 255, 0.2)' }}>
+            <Sparkles size={14} className="enhancing" style={{ marginRight: '8px' }} />
+            AI is enhancing your sketch...
+          </div>
+        )}
+
+        {enhanceError && (
+          <div className="status-banner">
+            {enhanceError}
+          </div>
+        )}
+      </nav>
 
       {isEnhancing && (
         <div style={{
           position: 'fixed',
           bottom: '24px',
           right: '24px',
-          background: 'rgba(23, 23, 23, 0.8)',
+          background: 'rgba(23, 23, 23, 0.95)',
           backdropFilter: 'blur(12px)',
-          border: '1px solid rgba(105, 101, 219, 0.3)',
+          border: '1px solid rgba(105, 101, 219, 0.4)',
           padding: '16px 20px',
           borderRadius: '16px',
           zIndex: 1000,
@@ -184,7 +225,7 @@ export function Toolbar() {
           flexDirection: 'column',
           gap: '12px',
           width: '240px',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+          boxShadow: '0 12px 48px rgba(0, 0, 0, 0.5)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Generating Image</span>
@@ -203,19 +244,6 @@ export function Toolbar() {
           </p>
         </div>
       )}
-
-      {isEnhancing && (
-        <div className="status-banner" style={{ background: 'rgba(105, 101, 219, 0.9)', color: '#fff', borderColor: 'rgba(255, 255, 255, 0.2)' }}>
-          <Sparkles size={14} className="enhancing" style={{ marginRight: '8px' }} />
-          AI is enhancing your sketch...
-        </div>
-      )}
-
-      {enhanceError && (
-        <div className="status-banner">
-          {enhanceError}
-        </div>
-      )}
-    </nav>
+    </>
   );
 }

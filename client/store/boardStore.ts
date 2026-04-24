@@ -37,6 +37,7 @@ type BoardState = {
   syncElements: (elements: WhiteboardElement[]) => void;
   selectElement: (id: string | null) => void;
   deleteSelected: () => WhiteboardElement[] | null;
+  eraseAtPoint: (point: { x: number; y: number }, hitTest: (point: { x: number; y: number }, element: WhiteboardElement) => boolean) => WhiteboardElement[] | null;
   clearBoard: () => void;
   undo: () => void;
   redo: () => void;
@@ -112,6 +113,28 @@ export const useBoardStore = create<BoardState>((set) => ({
       };
     });
 
+    return nextElements;
+  },
+  eraseAtPoint: (point, hitTest) => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      const hoveredElement = [...state.elements]
+        .reverse()
+        .find((element) => hitTest(point, element));
+
+      if (!hoveredElement) {
+        return state;
+      }
+
+      nextElements = state.elements.filter(
+        (element) => element.id !== hoveredElement.id
+      );
+
+      return {
+        elements: nextElements,
+        selectedElementId: null
+      };
+    });
     return nextElements;
   },
   clearBoard: () =>
