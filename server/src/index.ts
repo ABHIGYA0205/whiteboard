@@ -27,7 +27,7 @@ async function start() {
   app.use(
     cors(corsOptions)
   );
-  app.use(express.json({ limit: "10mb" }));
+  app.use(express.json({ limit: "100mb" }));
   app.use("/board", boardRouter);
   app.use("/ai", aiRouter);
   app.get("/health", (_request, response) => {

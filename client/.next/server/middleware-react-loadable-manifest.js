@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{\"hooks/useSocket.ts -> socket.io-client\":{\"id\":\"hooks/useSocket.ts -> socket.io-client\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_socket_io-client_build_esm_index_js.js\"]}}"
+self.__REACT_LOADABLE_MANIFEST='{"hooks/useSocket.ts -> socket.io-client":{"id":7093,"files":["static/chunks/93.cc6b9c68d68a2b76.js"]}}';
