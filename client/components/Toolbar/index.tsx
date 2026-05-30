@@ -4,7 +4,8 @@ import { TOOL_OPTIONS } from "@/components/Canvas/tools";
 import { exportSelectionToImage, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
 import { enhanceSketch } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import type { WhiteboardElement } from "@shared/types";
 import {
   MousePointer2,
   Hand,
@@ -19,7 +20,14 @@ import {
   Lock,
   Diamond,
   Image as ImageIcon,
-  Trash2
+  Trash2,
+  ChevronDown,
+  Palette,
+  Flame,
+  Zap,
+  Box,
+  Laptop,
+  Paintbrush
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -46,11 +54,57 @@ const COLORS = [
   { name: "Pink", value: "#ff2d55" }
 ];
 
-export function Toolbar() {
+const ENHANCE_STYLES = [
+  { id: "digital", label: "Digital Art", promptSuffix: "Clean digital art, detailed, professional vector, smooth gradients" },
+  { id: "sketch", label: "Pencil Sketch", promptSuffix: "Hand-drawn pencil sketch, graphite, fine details, shaded, textured paper" },
+  { id: "oil", label: "Oil Painting", promptSuffix: "Rich oil painting, textured canvas, heavy brushstrokes, classical masterpiece" },
+  { id: "anime", label: "Anime Style", promptSuffix: "Beautiful anime illustration, studio quality, vibrant colors, clean line art" },
+  { id: "watercolor", label: "Watercolor", promptSuffix: "Soft watercolor painting, color splashes, bleeding ink, beautiful wash, artistic" },
+  { id: "render", label: "3D Render", promptSuffix: "Stunning 3D clay render, Octane render, photorealistic, cinematic lighting, cute model" },
+  { id: "cyberpunk", label: "Cyberpunk", promptSuffix: "Cyberpunk aesthetic, neon glow, futuristic cities, synthwave colors, dark atmospheric" }
+];
+
+const STYLE_ICONS: Record<string, React.ReactNode> = {
+  digital: <Palette size={14} />,
+  sketch: <Pencil size={14} />,
+  oil: <Paintbrush size={14} />,
+  anime: <Zap size={14} />,
+  watercolor: <Flame size={14} />,
+  render: <Box size={14} />,
+  cyberpunk: <Laptop size={14} />
+};
+
+type ToolbarProps = {
+  collaboration?: {
+    emitReplace: (elements: WhiteboardElement[]) => void;
+    emitElementUpdate: (element: WhiteboardElement) => void;
+  };
+};
+
+export function Toolbar({ collaboration }: ToolbarProps) {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [timer, setTimer] = useState(0);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  
+  // Style selector states
+  const [selectedStyle, setSelectedStyle] = useState(ENHANCE_STYLES[0]);
+  const [showStyleMenu, setShowStyleMenu] = useState(false);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close style menu when clicking outside of it
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowStyleMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -71,12 +125,13 @@ export function Toolbar() {
   const elements = useBoardStore((state) => state.elements);
   const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
+  const selectElement = useBoardStore((state) => state.selectElement);
   const isLocked = useBoardStore((state) => state.isLocked);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
   const clearBoard = useBoardStore((state) => state.clearBoard);
 
   const handleEnhance = async () => {
-    // Gather all pencil/shape elements (the sketch)
+    // 1. Gather all drawing elements
     const drawingElements = elements.filter(
       (el) =>
         el.type === "pencil" ||
@@ -86,20 +141,127 @@ export function Toolbar() {
         el.type === "arrow"
     );
 
-    // Find a text element to use as the prompt
-    const textElement = elements.find(
-      (el) => el.type === "text" && el.text?.trim()
-    );
-
     if (drawingElements.length === 0) {
       setEnhanceError("Draw something first!");
       setTimeout(() => setEnhanceError(null), 3000);
       return;
     }
 
-    if (!textElement || !textElement.text?.trim()) {
-      setEnhanceError("Add a text prompt!");
-      setTimeout(() => setEnhanceError(null), 3000);
+    // 2. Identify the active seed element to start clustering.
+    // If the user has selected a drawing element, start there.
+    // Otherwise, start with the most recently drawn element.
+    let seedElement = drawingElements[drawingElements.length - 1];
+    if (selectedElementId) {
+      const selected = drawingElements.find((el) => el.id === selectedElementId);
+      if (selected) {
+        seedElement = selected;
+      }
+    }
+
+    // Helper to calculate bounding box bounds
+    const getBoundingBox = (el: WhiteboardElement) => {
+      const bounds = getNormalizedBounds(el);
+      if (el.type === "pencil") {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const pt of el.points) {
+          minX = Math.min(minX, pt.x);
+          minY = Math.min(minY, pt.y);
+          maxX = Math.max(maxX, pt.x);
+          maxY = Math.max(maxY, pt.y);
+        }
+        return { minX, minY, maxX, maxY };
+      } else {
+        return {
+          minX: bounds.x,
+          minY: bounds.y,
+          maxX: bounds.x + bounds.width,
+          maxY: bounds.y + bounds.height
+        };
+      }
+    };
+
+    const getBoxCenter = (box: { minX: number; minY: number; maxX: number; maxY: number }) => {
+      return {
+        x: (box.minX + box.maxX) / 2,
+        y: (box.minY + box.maxY) / 2
+      };
+    };
+
+    // 3. Spatially cluster drawings using BFS (threshold of 400px)
+    const cluster = [seedElement];
+    const remaining = drawingElements.filter((el) => el.id !== seedElement.id);
+    const queue = [seedElement];
+    const MAX_CLUSTER_DISTANCE = 400;
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const currentBox = getBoundingBox(current);
+      const currentCenter = getBoxCenter(currentBox);
+
+      for (let i = remaining.length - 1; i >= 0; i--) {
+        const candidate = remaining[i];
+        const candidateBox = getBoundingBox(candidate);
+        const candidateCenter = getBoxCenter(candidateBox);
+
+        const distance = Math.hypot(
+          currentCenter.x - candidateCenter.x,
+          currentCenter.y - candidateCenter.y
+        );
+
+        if (distance < MAX_CLUSTER_DISTANCE) {
+          cluster.push(candidate);
+          queue.push(candidate);
+          remaining.splice(i, 1);
+        }
+      }
+    }
+
+    // 4. Find all text elements with content
+    const textElements = elements.filter(
+      (el) => el.type === "text" && el.text?.trim()
+    );
+
+    if (textElements.length === 0) {
+      setEnhanceError("Add a text prompt next to your drawing!");
+      setTimeout(() => setEnhanceError(null), 3500);
+      return;
+    }
+
+    // 5. Calculate cluster bounding box
+    let clusterMinX = Infinity, clusterMinY = Infinity, clusterMaxX = -Infinity, clusterMaxY = -Infinity;
+    for (const el of cluster) {
+      const box = getBoundingBox(el);
+      clusterMinX = Math.min(clusterMinX, box.minX);
+      clusterMinY = Math.min(clusterMinY, box.minY);
+      clusterMaxX = Math.max(clusterMaxX, box.maxX);
+      clusterMaxY = Math.max(clusterMaxY, box.maxY);
+    }
+    const clusterCenter = {
+      x: (clusterMinX + clusterMaxX) / 2,
+      y: (clusterMinY + clusterMaxY) / 2
+    };
+
+    // 6. Find the closest text element to the cluster center
+    let closestTextElement: WhiteboardElement | null = null;
+    let minDistance = Infinity;
+
+    for (const textEl of textElements) {
+      const textBox = getBoundingBox(textEl);
+      const textCenter = getBoxCenter(textBox);
+      const distance = Math.hypot(
+        clusterCenter.x - textCenter.x,
+        clusterCenter.y - textCenter.y
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestTextElement = textEl;
+      }
+    }
+
+    if (!closestTextElement || !closestTextElement.text?.trim()) {
+      setEnhanceError("Add a text prompt next to your drawing!");
+      setTimeout(() => setEnhanceError(null), 3500);
       return;
     }
 
@@ -107,43 +269,39 @@ export function Toolbar() {
     setEnhanceError(null);
 
     try {
-      const imageBase64 = exportSelectionToImage(drawingElements);
+      const imageBase64 = exportSelectionToImage(cluster);
       if (!imageBase64) throw new Error("Capture failed.");
 
-      const result = await enhanceSketch(imageBase64, textElement.text.trim());
+      // Combine user text prompt with the premium style suffix
+      const userPrompt = closestTextElement.text.trim();
+      const styledPrompt = `${userPrompt}, ${selectedStyle.promptSuffix}`;
 
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const el of drawingElements) {
-        const bounds = getNormalizedBounds(el);
-        if (el.type === "pencil") {
-          for (const pt of el.points) {
-            minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
-            maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
-          }
-        } else {
-          minX = Math.min(minX, bounds.x); minY = Math.min(minY, bounds.y);
-          maxX = Math.max(maxX, bounds.x + bounds.width); maxY = Math.max(maxY, bounds.y + bounds.height);
-        }
-      }
+      const result = await enhanceSketch(imageBase64, styledPrompt);
 
       const imageElement = {
         id: crypto.randomUUID(),
         type: "image" as const,
-        x: minX,
-        y: minY,
-        width: Math.max(maxX - minX, 200),
-        height: Math.max(maxY - minY, 200),
+        x: clusterMinX,
+        y: clusterMinY,
+        width: Math.max(clusterMaxX - clusterMinX, 200),
+        height: Math.max(clusterMaxY - clusterMinY, 200),
         strokeColor: "#ffffff",
         strokeWidth: 1,
         imageUrl: result.imageUrl,
         points: []
       };
 
-      const drawingIds = new Set(drawingElements.map((el) => el.id));
-      const nextElements = elements.filter((el) => !drawingIds.has(el.id));
+      // Replace ONLY the sketch elements of the active cluster!
+      const clusterIds = new Set(cluster.map((el) => el.id));
+      const nextElements = elements.filter((el) => !clusterIds.has(el.id));
       nextElements.push(imageElement);
 
       commitElements(nextElements);
+      collaboration?.emitReplace(nextElements);
+
+      // Automatically switch active tool to SELECT and highlight the new image!
+      setTool("select");
+      selectElement(imageElement.id);
     } catch (error) {
       setEnhanceError(error instanceof Error ? error.message : "AI failed.");
       setTimeout(() => setEnhanceError(null), 5000);
@@ -161,6 +319,7 @@ export function Toolbar() {
       );
       setElements(nextElements);
       commitElements(nextElements);
+      collaboration?.emitReplace(nextElements);
     }
   };
 
@@ -213,14 +372,60 @@ export function Toolbar() {
 
         <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
 
-        <button 
-          className={`tool-button ai-button ${isEnhancing ? "enhancing" : ""}`}
-          onClick={handleEnhance}
-          disabled={isEnhancing}
-          title="Enhance with AI"
-        >
-          <Sparkles size={18} />
-        </button>
+        {/* Premium AI Enhancer and Style Selector */}
+        <div style={{ position: "relative", display: "flex", gap: "2px" }} ref={dropdownRef}>
+          <button 
+            className={`tool-button ai-button ${isEnhancing ? "enhancing" : ""}`}
+            onClick={handleEnhance}
+            disabled={isEnhancing}
+            title={`Enhance sketch using ${selectedStyle.label}`}
+            style={{ 
+              borderTopRightRadius: 0, 
+              borderBottomRightRadius: 0,
+              paddingRight: '6px',
+              paddingLeft: '8px'
+            }}
+          >
+            <Sparkles size={16} style={{ marginRight: '4px' }} />
+            <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+              {selectedStyle.label.split(" ")[0]}
+            </span>
+          </button>
+          
+          <button
+            className="tool-button ai-button"
+            disabled={isEnhancing}
+            onClick={() => setShowStyleMenu(!showStyleMenu)}
+            title="Choose AI Style Preset"
+            style={{ 
+              width: '20px',
+              borderTopLeftRadius: 0, 
+              borderBottomLeftRadius: 0,
+              borderLeft: '1px solid rgba(255,255,255,0.2)',
+              padding: 0
+            }}
+          >
+            <ChevronDown size={12} />
+          </button>
+
+          {showStyleMenu && (
+            <div className="style-dropdown-menu">
+              {ENHANCE_STYLES.map((style) => (
+                <button
+                  key={style.id}
+                  className={`style-dropdown-item ${selectedStyle.id === style.id ? "active" : ""}`}
+                  onClick={() => {
+                    setSelectedStyle(style);
+                    setShowStyleMenu(false);
+                  }}
+                >
+                  <span className="style-icon">{STYLE_ICONS[style.id]}</span>
+                  <span>{style.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
 
@@ -289,7 +494,7 @@ export function Toolbar() {
             }} />
           </div>
           <p style={{ margin: 0, fontSize: '11px', color: '#9ba1b0' }}>
-            Our AI models are refining your sketch into a professional illustration.
+            Our AI models are refining your sketch into a professional illustration ({selectedStyle.label}).
           </p>
         </div>
       )}

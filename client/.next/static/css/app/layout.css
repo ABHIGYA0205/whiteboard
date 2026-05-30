@@ -1,3 +1,6 @@
+/*!******************************************************************************************************************************************************************************************************************************************************************!*\
+  !*** css ../node_modules/next/dist/build/webpack/loaders/css-loader/src/index.js??ruleSet[1].rules[14].oneOf[12].use[2]!../node_modules/next/dist/build/webpack/loaders/postcss-loader/src/index.js??ruleSet[1].rules[14].oneOf[12].use[3]!./styles/globals.css ***!
+  \******************************************************************************************************************************************************************************************************************************************************************/
 :root {
   --bg: #121212;
   --sidebar-bg: #232329;
@@ -61,7 +64,7 @@ button {
 
 .workspace-shell {
   position: relative;
-  flex: 1;
+  flex: 1 1;
   height: 100%;
   overflow: hidden;
 }
@@ -341,7 +344,8 @@ button {
   border: 1px solid var(--panel-border);
   border-radius: 24px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
 }
 
 .eyebrow {
@@ -393,6 +397,7 @@ button {
 .features-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  grid-gap: 16px;
   gap: 16px;
   margin-top: 48px;
 }
@@ -426,7 +431,8 @@ button {
   z-index: 1000;
   width: 180px;
   background: rgba(23, 23, 23, 0.95);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+          backdrop-filter: blur(12px);
   border: 1px solid rgba(105, 101, 219, 0.4);
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);

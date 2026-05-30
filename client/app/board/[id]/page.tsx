@@ -109,7 +109,7 @@ export default function BoardPage({ params }: BoardPageProps) {
     <main className="board-shell">
       {/* Top UI */}
       <Sidebar boardId={boardId} onClear={handleClear} />
-      <Toolbar />
+      <Toolbar collaboration={collaboration} />
       
       {/* Main Area */}
       <div className="workspace-shell">
