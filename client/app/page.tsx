@@ -3,7 +3,7 @@
 import { createBoard } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Sparkles, MousePointer2, Download, Zap, Share2, Shield } from "lucide-react";
+import { Sparkles, MousePointer2, Download, Zap, Maximize, Shield } from "lucide-react";
 
 export default function HomePage() {
   const router = useRouter();
@@ -27,133 +27,76 @@ export default function HomePage() {
   };
 
   return (
-    <main className="home-shell" style={{ 
-      background: 'radial-gradient(circle at top, #1a1525 0%, #010409 100%)',
-      minHeight: '100vh',
-      height: '100vh',
-      width: '100vw',
-      overflowY: 'auto',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'flex-start',
-      padding: '4rem 2rem',
-      fontFamily: 'Inter, system-ui, sans-serif'
-    }}>
-      <div style={{ maxWidth: '1200px', width: '100%' }}>
+    <main className="home-shell-custom">
+      <div className="home-container">
         {/* Header / Nav */}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontWeight: 'bold', fontSize: '1.5rem', color: '#fff' }}>
-            <div style={{ width: '32px', height: '32px', background: 'linear-gradient(135deg, #6965db, #ff6b6b)', borderRadius: '8px' }}></div>
+        <header className="home-header">
+          <div className="home-logo">
+            <div className="home-logo-icon"></div>
             Whiteboard
           </div>
         </header>
 
         {/* Split Hero Section */}
-        <section style={{ 
-          display: 'flex', 
-          flexDirection: 'row',
-          gap: '4rem', 
-          alignItems: 'center', 
-          margin: '2rem 0 6rem 0',
-          width: '100%'
-        }}>
+        <section className="hero-section">
           {/* Left: Video */}
-          <div style={{ 
-            flex: '1.5',
-            borderRadius: '32px', 
-            overflow: 'hidden', 
-            boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 40px rgba(105, 101, 219, 0.2)',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            position: 'relative',
-            aspectRatio: '16/9'
-          }}>
+          <div className="hero-video-container">
             <video 
               src="/trailer.mp4" 
               autoPlay 
               loop 
               muted 
               playsInline 
-              style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} 
+              className="hero-video"
             />
-            <div style={{ position: 'absolute', inset: 0, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1)', borderRadius: '32px', pointerEvents: 'none' }} />
+            <div className="hero-video-overlay" />
           </div>
 
           {/* Right: Text Content */}
-          <div style={{ flex: '1', textAlign: 'center' }}>
-            <h1 style={{ fontSize: 'clamp(2.5rem, 5vw, 4rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '1.5rem', color: '#fff' }}>
+          <div className="hero-text-container">
+            <h1 className="hero-title">
               The infinite canvas for <br/>
-              <span style={{ background: 'linear-gradient(to right, #a5a6f6, #ff8a8a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>limitless creativity.</span>
+              <span className="hero-title-gradient">limitless creativity.</span>
             </h1>
-            <p style={{ fontSize: '1.25rem', color: '#a0aec0', marginBottom: '2.5rem', lineHeight: 1.6 }}>
-              A professional, real-time collaborative whiteboard designed for teams to sketch, think, and build together. Powered by advanced AI enhancements.
+            <p className="hero-description">
+              A professional whiteboard designed to help you sketch, think, and build effortlessly. Powered by advanced AI enhancements.
             </p>
             
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <div className="hero-button-wrapper">
               <button
                 disabled={isPending}
                 onClick={handleCreateBoard}
-                style={{
-                  background: 'linear-gradient(135deg, #6965db, #5551c4)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '1.25rem 2.5rem',
-                  fontSize: '1.125rem',
-                  fontWeight: 600,
-                  borderRadius: '12px',
-                  cursor: isPending ? 'wait' : 'pointer',
-                  boxShadow: '0 10px 25px rgba(105, 101, 219, 0.3)',
-                  transition: 'transform 0.2s, box-shadow 0.2s',
-                  opacity: isPending ? 0.7 : 1,
-                }}
-                onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-                onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+                className="hero-button"
               >
                 {isPending ? "Starting your session..." : "Create New Board"}
               </button>
             </div>
-            {error && <p style={{ color: '#ff6b6b', marginTop: '1rem' }}>{error}</p>}
+            {error && <p className="hero-error">{error}</p>}
           </div>
         </section>
 
         {/* Features Grid */}
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '2rem', marginTop: '4rem' }}>
+        <section className="features-grid-custom">
           {[
             { icon: <Sparkles size={24} color="#a5a6f6" />, title: "AI Enhancements", desc: "Turn rough sketches into professional illustrations instantly with cutting-edge AI." },
-            { icon: <Share2 size={24} color="#a5a6f6" />, title: "Real-time Collaboration", desc: "Work together with your team seamlessly with live cursors and instant syncing." },
+            { icon: <Maximize size={24} color="#a5a6f6" />, title: "Infinite Canvas", desc: "Never run out of space with an endless canvas that expands as your ideas grow." },
             { icon: <MousePointer2 size={24} color="#a5a6f6" />, title: "Precision Tools", desc: "A full suite of drawing, shape, and text tools for complete creative control." },
             { icon: <Download size={24} color="#a5a6f6" />, title: "Local Export", desc: "Save your work as high-quality PNGs or JSON state files to keep your data safe." },
             { icon: <Shield size={24} color="#a5a6f6" />, title: "Canvas Locking", desc: "Lock the canvas to prevent accidental edits while presenting or reviewing work." },
             { icon: <Zap size={24} color="#a5a6f6" />, title: "Lightning Fast", desc: "Built on Next.js and optimized HTML5 Canvas for zero-latency drawing." },
           ].map((feature, i) => (
-            <div key={i} style={{
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid rgba(255, 255, 255, 0.05)',
-              padding: '2.5rem 2rem',
-              borderRadius: '24px',
-              backdropFilter: 'blur(10px)',
-              transition: 'transform 0.3s, background 0.3s',
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.transform = 'translateY(-5px)';
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
-            }}
-            >
-              <div style={{ background: 'rgba(105, 101, 219, 0.1)', width: '56px', height: '56px', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1.5rem', border: '1px solid rgba(105, 101, 219, 0.2)' }}>
+            <div key={i} className="feature-item-custom">
+              <div className="feature-icon-wrapper">
                 {feature.icon}
               </div>
-              <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: '#fff', marginBottom: '0.75rem' }}>{feature.title}</h3>
-              <p style={{ color: '#a0aec0', lineHeight: 1.6 }}>{feature.desc}</p>
+              <h3 className="feature-title">{feature.title}</h3>
+              <p className="feature-desc">{feature.desc}</p>
             </div>
           ))}
         </section>
 
         {/* Footer */}
-        <footer style={{ marginTop: '8rem', borderTop: '1px solid rgba(255,255,255,0.05)', padding: '3rem 0', textAlign: 'center', color: '#718096', fontSize: '0.875rem' }}>
+        <footer className="home-footer">
           <p>© {new Date().getFullYear()} Built for professional visual thinking.</p>
         </footer>
       </div>
