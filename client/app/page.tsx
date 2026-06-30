@@ -47,48 +47,73 @@ export default function HomePage() {
             <div style={{ width: '32px', height: '32px', background: 'linear-gradient(135deg, #6965db, #ff6b6b)', borderRadius: '8px' }}></div>
             Whiteboard
           </div>
-          <button style={{ background: 'transparent', color: '#a0aec0', border: 'none', cursor: 'pointer', fontSize: '1rem', fontWeight: 500 }} onClick={() => window.open('https://github.com/ABHIGYA0205/whiteboard', '_blank')}>
-            About Project
-          </button>
         </header>
 
-        {/* Hero Section */}
-        <section style={{ textAlign: 'center', margin: '4rem 0 6rem 0' }}>
-          <div style={{ display: 'inline-block', padding: '0.5rem 1rem', background: 'rgba(105, 101, 219, 0.1)', color: '#a5a6f6', borderRadius: '20px', fontSize: '0.875rem', fontWeight: 600, marginBottom: '1.5rem', border: '1px solid rgba(105, 101, 219, 0.2)' }}>
-            ✨ Version 1.0 is now live
+        {/* Split Hero Section */}
+        <section style={{ 
+          display: 'flex', 
+          flexDirection: 'row',
+          gap: '4rem', 
+          alignItems: 'center', 
+          margin: '2rem 0 6rem 0',
+          width: '100%'
+        }}>
+          {/* Left: Video */}
+          <div style={{ 
+            flex: '1.5',
+            borderRadius: '32px', 
+            overflow: 'hidden', 
+            boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 40px rgba(105, 101, 219, 0.2)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            position: 'relative',
+            aspectRatio: '16/9'
+          }}>
+            <video 
+              src="/trailer.mp4" 
+              autoPlay 
+              loop 
+              muted 
+              playsInline 
+              style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} 
+            />
+            <div style={{ position: 'absolute', inset: 0, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1)', borderRadius: '32px', pointerEvents: 'none' }} />
           </div>
-          <h1 style={{ fontSize: 'clamp(3rem, 8vw, 5rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '1.5rem', color: '#fff' }}>
-            The infinite canvas for <br/>
-            <span style={{ background: 'linear-gradient(to right, #a5a6f6, #ff8a8a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>limitless creativity.</span>
-          </h1>
-          <p style={{ fontSize: '1.25rem', color: '#a0aec0', maxWidth: '600px', margin: '0 auto 2.5rem auto', lineHeight: 1.6 }}>
-            A professional, real-time collaborative whiteboard designed for teams to sketch, think, and build together. Powered by advanced AI enhancements.
-          </p>
-          
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-            <button
-              disabled={isPending}
-              onClick={handleCreateBoard}
-              style={{
-                background: 'linear-gradient(135deg, #6965db, #5551c4)',
-                color: 'white',
-                border: 'none',
-                padding: '1.25rem 2.5rem',
-                fontSize: '1.125rem',
-                fontWeight: 600,
-                borderRadius: '12px',
-                cursor: isPending ? 'wait' : 'pointer',
-                boxShadow: '0 10px 25px rgba(105, 101, 219, 0.3)',
-                transition: 'transform 0.2s, box-shadow 0.2s',
-                opacity: isPending ? 0.7 : 1,
-              }}
-              onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-              onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
-            >
-              {isPending ? "Starting your session..." : "Create New Board"}
-            </button>
+
+          {/* Right: Text Content */}
+          <div style={{ flex: '1', textAlign: 'center' }}>
+            <h1 style={{ fontSize: 'clamp(2.5rem, 5vw, 4rem)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.1, marginBottom: '1.5rem', color: '#fff' }}>
+              The infinite canvas for <br/>
+              <span style={{ background: 'linear-gradient(to right, #a5a6f6, #ff8a8a)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>limitless creativity.</span>
+            </h1>
+            <p style={{ fontSize: '1.25rem', color: '#a0aec0', marginBottom: '2.5rem', lineHeight: 1.6 }}>
+              A professional, real-time collaborative whiteboard designed for teams to sketch, think, and build together. Powered by advanced AI enhancements.
+            </p>
+            
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <button
+                disabled={isPending}
+                onClick={handleCreateBoard}
+                style={{
+                  background: 'linear-gradient(135deg, #6965db, #5551c4)',
+                  color: 'white',
+                  border: 'none',
+                  padding: '1.25rem 2.5rem',
+                  fontSize: '1.125rem',
+                  fontWeight: 600,
+                  borderRadius: '12px',
+                  cursor: isPending ? 'wait' : 'pointer',
+                  boxShadow: '0 10px 25px rgba(105, 101, 219, 0.3)',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                  opacity: isPending ? 0.7 : 1,
+                }}
+                onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+                onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+              >
+                {isPending ? "Starting your session..." : "Create New Board"}
+              </button>
+            </div>
+            {error && <p style={{ color: '#ff6b6b', marginTop: '1rem' }}>{error}</p>}
           </div>
-          {error && <p style={{ color: '#ff6b6b', marginTop: '1rem' }}>{error}</p>}
         </section>
 
         {/* Features Grid */}

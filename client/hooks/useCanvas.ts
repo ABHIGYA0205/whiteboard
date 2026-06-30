@@ -248,6 +248,7 @@ export function useCanvas({
       setElements(newElements);
       collaboration.emitDraw(element);
       useBoardStore.getState().setEditingElementId(element.id);
+      selectElement(null);
       useBoardStore.getState().setTool("select");
       return;
     }
