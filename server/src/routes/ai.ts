@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { env } from "../utils/env";
 
 export const aiRouter = Router();
 
@@ -17,44 +16,28 @@ aiRouter.post("/enhance", async (req, res) => {
       return;
     }
 
-    if (!env.hfToken) {
-      res.status(500).json({
-        error:
-          "HF_TOKEN is not configured. Add your Hugging Face token to server/.env"
-      });
-      return;
-    }
-
     const enhancedPrompt =
       `High quality, detailed illustration: ${prompt}. ` +
       `Clean, professional, digital art style.`;
 
-    console.log("Sending request to Hugging Face...");
+    console.log("Sending request to Pollinations.ai...");
 
-    // Use HF's inference router with the free hf-inference provider
-    const response = await fetch(
-      "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.hfToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ inputs: enhancedPrompt })
-      }
-    );
+    // Pollinations.ai is completely free, no API key needed
+    const encodedPrompt = encodeURIComponent(enhancedPrompt);
+    const pollinationsUrl =
+      `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${Date.now()}`;
+
+    const response = await fetch(pollinationsUrl);
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      const errorMsg =
-        errorData?.error || `HF API returned status ${response.status}`;
-      throw new Error(errorMsg);
+      throw new Error(`Pollinations API returned status ${response.status}`);
     }
 
     const resultBuffer = Buffer.from(await response.arrayBuffer());
 
+    const contentType = response.headers.get("content-type") || "image/png";
     const resultBase64 =
-      `data:image/png;base64,${resultBuffer.toString("base64")}`;
+      `data:${contentType};base64,${resultBuffer.toString("base64")}`;
 
     res.json({
       imageUrl: resultBase64
@@ -66,7 +49,7 @@ aiRouter.post("/enhance", async (req, res) => {
       error:
         error instanceof Error
           ? error.message
-          : "Unknown Hugging Face API error"
+          : "Unknown image generation error"
     });
   }
 });
