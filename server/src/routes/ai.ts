@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { env } from "../utils/env";
-import { InferenceClient } from "@huggingface/inference";
 
 export const aiRouter = Router();
 
@@ -32,17 +31,28 @@ aiRouter.post("/enhance", async (req, res) => {
 
     console.log("Sending request to Hugging Face...");
 
-    const client = new InferenceClient(env.hfToken);
+    // Use direct fetch to HF's free serverless Inference API
+    // This bypasses the paid Inference Providers / credits system
+    const response = await fetch(
+      "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.hfToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: enhancedPrompt })
+      }
+    );
 
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      const errorMsg =
+        errorData?.error || `HF API returned status ${response.status}`;
+      throw new Error(errorMsg);
+    }
 
-    const result = await client.textToImage({
-      model: "stabilityai/stable-diffusion-xl-base-1.0",
-      inputs: enhancedPrompt,
-      outputType: "blob"
-    });
-
-    const resultBuffer = Buffer.from(await new Response(result).arrayBuffer());
-
+    const resultBuffer = Buffer.from(await response.arrayBuffer());
 
     const resultBase64 =
       `data:image/png;base64,${resultBuffer.toString("base64")}`;
