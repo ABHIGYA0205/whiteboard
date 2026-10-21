@@ -36,9 +36,8 @@ aiRouter.post("/enhance", async (req, res) => {
 
 
     const result = await client.textToImage({
-      model: "black-forest-labs/FLUX.1-schnell",
+      model: "stabilityai/stable-diffusion-xl-base-1.0",
       inputs: enhancedPrompt,
-      provider: "fal-ai",
       outputType: "blob"
     });
 
