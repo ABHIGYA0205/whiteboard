@@ -4,15 +4,19 @@ node_modules
 .pnp.js
 
 # Testing
-/coverage
+coverage/
 
 # Next.js
-/.next/
-/out/
+.next/
+out/
 
 # Production
-/build
-/dist
+build/
+dist/
+
+# Large binaries & media
+client/public/trailer.mp4
+*.mp4
 
 # Misc
 .DS_Store
