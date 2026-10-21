@@ -3,9 +3,15 @@
 import {
   createElement,
   drawElement,
+  drawMarqueeBox,
+  drawMultiSelectionBox,
+  elementIntersectsBox,
+  getBoundingBoxResizeHandleAtPoint,
+  getCombinedBounds,
   getResizeHandleAtPoint,
   hitTestElement,
   resizeElement,
+  resizeElementsGroup,
   translateElement,
   updateElementDraft
 } from "@/components/Canvas/drawingUtils";
@@ -28,6 +34,7 @@ type CollaborationApi = {
   emitElementUpdate: (element: WhiteboardElement) => void;
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
+  emitLaser?: (point: Point, color?: string) => void;
 };
 
 type UseCanvasOptions = {
@@ -45,7 +52,7 @@ type InteractionState =
     }
   | {
       mode: "dragging";
-      elementId: string;
+      elementIds: string[];
       origin: Point;
       previousElements: WhiteboardElement[];
     }
@@ -54,6 +61,19 @@ type InteractionState =
       elementId: string;
       handle: "top-left" | "top-right" | "bottom-left" | "bottom-right";
       previousElements: WhiteboardElement[];
+    }
+  | {
+      mode: "resizing-group";
+      elementIds: string[];
+      handle: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+      initialBounds: { x: number; y: number; width: number; height: number };
+      initialElements: WhiteboardElement[];
+      previousElements: WhiteboardElement[];
+    }
+  | {
+      mode: "box-selecting";
+      origin: Point;
+      current: Point;
     }
   | { mode: "erasing"; previousElements: WhiteboardElement[] }
   | { mode: "panning"; origin: Point; viewportOrigin: Point };
@@ -70,6 +90,7 @@ export function useCanvas({
 }: UseCanvasOptions) {
   const elements = useBoardStore((state) => state.elements);
   const selectedElementId = useBoardStore((state) => state.selectedElementId);
+  const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const tool = useBoardStore((state) => state.tool);
   const strokeColor = useBoardStore((state) => state.strokeColor);
   const fillColor = useBoardStore((state) => state.fillColor);
@@ -82,6 +103,12 @@ export function useCanvas({
   const isLocked = useBoardStore((state) => state.isLocked);
 
   const interactionRef = useRef<InteractionState>({ mode: "idle" });
+  const lastClickRef = useRef<{ time: number; x: number; y: number; id: string | null }>({
+    time: 0,
+    x: 0,
+    y: 0,
+    id: null
+  });
   const devicePixelRatioRef = useRef(1);
   const elementsRef = useRef(elements);
   const viewportRef = useRef(viewport);
@@ -121,9 +148,14 @@ export function useCanvas({
     return () => observer.disconnect();
   }, [canvasRef, containerRef]);
 
+  const theme = useBoardStore((state) => state.theme);
+  const activeTouchesRef = useRef<Map<number, Point>>(new Map());
+  const pinchStartDistRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number | null>(null);
+
   useEffect(() => {
     render();
-  }, [elements, selectedElementId, viewport]);
+  }, [elements, selectedElementId, selectedElementIds, viewport, theme]);
 
   // Re-render when async images finish loading
   useEffect(() => {
@@ -146,23 +178,75 @@ export function useCanvas({
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#010409";
+    context.fillStyle = theme === "dark" ? "#010409" : "#f8fafc";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     context.save();
     context.translate(currentViewport.x, currentViewport.y);
     context.scale(currentViewport.zoom, currentViewport.zoom);
-    drawGrid(context, canvas.width / ratio, canvas.height / ratio, currentViewport);
+    drawGrid(context, canvas.width / ratio, canvas.height / ratio, currentViewport, theme);
+
+    const isSingleSelection = selectedElementIds.length === 1;
+    const isMultiSelection = selectedElementIds.length > 1;
+
     currentElements.forEach((element) =>
       drawElement(
         context,
         element,
-        element.id === selectedElementId,
-        tool === "select" && interactionRef.current.mode !== "drawing"
+        isSingleSelection && element.id === selectedElementId,
+        tool === "select" && interactionRef.current.mode !== "drawing",
+        theme
       )
     );
+
+    if (isMultiSelection && tool === "select" && interactionRef.current.mode !== "drawing") {
+      const selectedEls = currentElements.filter((el) => selectedElementIds.includes(el.id));
+      drawMultiSelectionBox(context, selectedEls);
+    }
+
+    if (interactionRef.current.mode === "box-selecting") {
+      const box = {
+        x: Math.min(interactionRef.current.origin.x, interactionRef.current.current.x),
+        y: Math.min(interactionRef.current.origin.y, interactionRef.current.current.y),
+        width: Math.abs(interactionRef.current.current.x - interactionRef.current.origin.x),
+        height: Math.abs(interactionRef.current.current.y - interactionRef.current.origin.y)
+      };
+      drawMarqueeBox(context, box);
+    }
+
+    // F2.5: Render glowing laser pointer trail
+    const laserPoints = useBoardStore.getState().laserPoints;
+    const now = Date.now();
+    for (const lp of laserPoints) {
+      const age = now - lp.time;
+      if (age > 1200) continue;
+      const alpha = 1 - age / 1200;
+      context.save();
+      context.shadowColor = lp.color;
+      context.shadowBlur = 12;
+      context.fillStyle = lp.color;
+      context.globalAlpha = alpha;
+      context.beginPath();
+      context.arc(lp.x, lp.y, 6 * alpha, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+    }
+
     context.restore();
   };
+
+  useEffect(() => {
+    let animId: number;
+    const tick = () => {
+      if (useBoardStore.getState().laserPoints.length > 0) {
+        useBoardStore.getState().clearExpiredLaserPoints();
+        render();
+      }
+      animId = requestAnimationFrame(tick);
+    };
+    animId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animId);
+  }, []);
 
   const getCanvasPoint = (event: PointerEvent | ReactPointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -187,7 +271,7 @@ export function useCanvas({
       .reverse()
       .find((element) => hitTestElement(point, element));
 
-    if (event.button === 1 || event.button === 2 || event.shiftKey || tool === "pan") {
+    if (event.button === 1 || event.button === 2 || (event.shiftKey && tool === "pan") || tool === "pan") {
       interactionRef.current = {
         mode: "panning",
         origin: { x: event.clientX, y: event.clientY },
@@ -201,10 +285,32 @@ export function useCanvas({
     }
 
     if (tool === "select") {
-      if (activeElement) {
-        const handle = getResizeHandleAtPoint(point, activeElement);
-        selectElement(activeElement.id);
+      // 1. Check resize handle on multi-selection bounding box
+      if (selectedElementIds.length > 1) {
+        const selectedEls = currentElements.filter((el) => selectedElementIds.includes(el.id));
+        const groupBounds = getCombinedBounds(selectedEls);
+        if (groupBounds) {
+          const groupHandle = getBoundingBoxResizeHandleAtPoint(point, groupBounds);
+          if (groupHandle) {
+            interactionRef.current = {
+              mode: "resizing-group",
+              elementIds: [...selectedElementIds],
+              handle: groupHandle,
+              initialBounds: groupBounds,
+              initialElements: currentElements.map((el) => ({
+                ...el,
+                points: el.points ? [...el.points] : []
+              })),
+              previousElements: currentElements
+            };
+            return;
+          }
+        }
+      }
 
+      // 2. Check resize handle on single selected element
+      if (selectedElementIds.length === 1 && activeElement && activeElement.id === selectedElementIds[0]) {
+        const handle = getResizeHandleAtPoint(point, activeElement);
         if (handle) {
           interactionRef.current = {
             mode: "resizing",
@@ -214,17 +320,79 @@ export function useCanvas({
           };
           return;
         }
+      }
 
+      // 3. Check active element hit
+      if (activeElement) {
+        const now = Date.now();
+        const isDoubleTap =
+          lastClickRef.current.id === activeElement.id &&
+          now - lastClickRef.current.time < 380 &&
+          Math.hypot(point.x - lastClickRef.current.x, point.y - lastClickRef.current.y) < 20;
+
+        lastClickRef.current = { time: now, x: point.x, y: point.y, id: activeElement.id };
+
+        if (
+          isDoubleTap &&
+          (activeElement.type === "text" ||
+            activeElement.type === "sticky" ||
+            activeElement.type === "rectangle" ||
+            activeElement.type === "circle")
+        ) {
+          useBoardStore.getState().setEditingElementId(activeElement.id);
+          selectElement(activeElement.id);
+          return;
+        }
+
+        // Shift + Click: toggle element in/out of selection
+        if (event.shiftKey) {
+          const isAlreadySelected = selectedElementIds.includes(activeElement.id);
+          const nextIds = isAlreadySelected
+            ? selectedElementIds.filter((id) => id !== activeElement.id)
+            : [...selectedElementIds, activeElement.id];
+          selectElement(nextIds);
+          interactionRef.current = {
+            mode: "dragging",
+            elementIds: nextIds,
+            origin: point,
+            previousElements: currentElements
+          };
+          return;
+        }
+
+        // Click on element: if already in selection, keep multi-selection for group drag!
+        if (selectedElementIds.includes(activeElement.id)) {
+          interactionRef.current = {
+            mode: "dragging",
+            elementIds: selectedElementIds,
+            origin: point,
+            previousElements: currentElements
+          };
+          return;
+        }
+
+        // Otherwise select only this element
+        selectElement(activeElement.id);
         interactionRef.current = {
           mode: "dragging",
-          elementId: activeElement.id,
+          elementIds: [activeElement.id],
           origin: point,
           previousElements: currentElements
         };
         return;
       }
 
-      selectElement(null);
+      // 4. Clicked on empty canvas -> Marquee box selection!
+      lastClickRef.current = { time: Date.now(), x: point.x, y: point.y, id: null };
+      if (!event.shiftKey) {
+        selectElement(null);
+      }
+      interactionRef.current = {
+        mode: "box-selecting",
+        origin: point,
+        current: point
+      };
+      render();
       return;
     }
 
@@ -253,6 +421,25 @@ export function useCanvas({
       return;
     }
 
+    if (tool === "laser") {
+      useBoardStore.getState().addLaserPoint(point, strokeColor);
+      collaboration.emitLaser?.(point, strokeColor);
+      render();
+      return;
+    }
+
+    if (tool === "sticky") {
+      const element = createElement("sticky", point, strokeColor, 1, fillColor !== "transparent" ? fillColor : "#fef08a");
+      const newElements = [...currentElements, element];
+      setElements(newElements);
+      commitElements(newElements);
+      collaboration.emitDraw(element);
+      useBoardStore.getState().setEditingElementId(element.id);
+      selectElement(element.id);
+      useBoardStore.getState().setTool("select");
+      return;
+    }
+
     const element = createElement(tool, point, strokeColor, strokeWidth, fillColor);
     setElements([...currentElements, element]);
     selectElement(element.id);
@@ -272,6 +459,13 @@ export function useCanvas({
       y: point.y,
       color: strokeColor
     });
+
+    if (tool === "laser" && event.buttons > 0) {
+      useBoardStore.getState().addLaserPoint(point, strokeColor);
+      collaboration.emitLaser?.(point, strokeColor);
+      render();
+      return;
+    }
 
     const interaction = interactionRef.current;
 
@@ -308,11 +502,34 @@ export function useCanvas({
       return;
     }
 
+    if (interaction.mode === "box-selecting") {
+      interactionRef.current = {
+        ...interaction,
+        current: point
+      };
+      const box = {
+        x: Math.min(interaction.origin.x, point.x),
+        y: Math.min(interaction.origin.y, point.y),
+        width: Math.abs(point.x - interaction.origin.x),
+        height: Math.abs(point.y - interaction.origin.y)
+      };
+
+      if (box.width > 4 || box.height > 4) {
+        const matched = currentElements
+          .filter((el) => elementIntersectsBox(el, box))
+          .map((el) => el.id);
+        selectElement(matched);
+      }
+      render();
+      return;
+    }
+
     if (interaction.mode === "dragging") {
       const deltaX = point.x - interaction.origin.x;
       const deltaY = point.y - interaction.origin.y;
+      const idSet = new Set(interaction.elementIds);
       const nextElements = currentElements.map((element) =>
-        element.id === interaction.elementId
+        idSet.has(element.id)
           ? translateElement(element, deltaX, deltaY)
           : element
       );
@@ -321,12 +538,10 @@ export function useCanvas({
         ...interaction,
         origin: point
       };
-      const element = nextElements.find(
-        (candidate) => candidate.id === interaction.elementId
+      const updatedElements = nextElements.filter((candidate) =>
+        idSet.has(candidate.id)
       );
-      if (element) {
-        collaboration.emitElementUpdate(element);
-      }
+      updatedElements.forEach((el) => collaboration.emitElementUpdate(el));
       return;
     }
 
@@ -346,13 +561,48 @@ export function useCanvas({
       return;
     }
 
+    if (interaction.mode === "resizing-group") {
+      const idSet = new Set(interaction.elementIds);
+      const targetInitialEls = interaction.initialElements.filter((el) =>
+        idSet.has(el.id)
+      );
+      const resizedTargets = resizeElementsGroup(
+        targetInitialEls,
+        interaction.initialBounds,
+        interaction.handle,
+        point
+      );
+      const targetMap = new Map(resizedTargets.map((el) => [el.id, el]));
+
+      const nextElements = currentElements.map((el) =>
+        targetMap.get(el.id) || el
+      );
+      setElements(nextElements);
+      resizedTargets.forEach((el) => collaboration.emitElementUpdate(el));
+      return;
+    }
+
     if (interaction.mode === "erasing") {
       eraseAtPoint(point);
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event?.currentTarget && event.pointerId !== undefined) {
+      try {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      } catch {}
+    }
+
     if (interactionRef.current.mode === "drawing") {
+      const drawnEl = useBoardStore.getState().elements.find(
+        (el) => el.id === (interactionRef.current as any).elementId
+      );
+      if (drawnEl) {
+        collaboration.emitDraw(drawnEl);
+      }
       commitElements(
         useBoardStore.getState().elements,
         interactionRef.current.previousElements
@@ -361,12 +611,20 @@ export function useCanvas({
 
     if (
       interactionRef.current.mode === "dragging" ||
-      interactionRef.current.mode === "resizing"
+      interactionRef.current.mode === "resizing" ||
+      interactionRef.current.mode === "resizing-group"
     ) {
       commitElements(
         useBoardStore.getState().elements,
         interactionRef.current.previousElements
       );
+      if (collaboration.emitReplace) {
+        collaboration.emitReplace(useBoardStore.getState().elements);
+      }
+    }
+
+    if (interactionRef.current.mode === "box-selecting") {
+      render();
     }
 
     if (interactionRef.current.mode === "erasing") {
@@ -422,7 +680,8 @@ function drawGrid(
   context: CanvasRenderingContext2D,
   width: number,
   height: number,
-  viewport: { x: number; y: number; zoom: number }
+  viewport: { x: number; y: number; zoom: number },
+  theme: "dark" | "light" = "dark"
 ) {
   const startX = -viewport.x / viewport.zoom;
   const startY = -viewport.y / viewport.zoom;
@@ -430,7 +689,7 @@ function drawGrid(
   const endY = startY + height / viewport.zoom;
 
   context.beginPath();
-  context.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  context.strokeStyle = theme === "dark" ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)";
   context.lineWidth = 1 / viewport.zoom;
 
   for (

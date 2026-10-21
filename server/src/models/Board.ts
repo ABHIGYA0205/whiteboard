@@ -5,7 +5,7 @@ const pointSchema = new Schema(
     x: { type: Number, required: true },
     y: { type: Number, required: true }
   },
-  { _id: false }
+  { _id: false, strict: "throw" }
 );
 
 const elementSchema = new Schema(
@@ -13,7 +13,7 @@ const elementSchema = new Schema(
     id: { type: String, required: true },
     type: {
       type: String,
-      enum: ["pencil", "rectangle", "circle", "line", "arrow"],
+      enum: ["pencil", "rectangle", "circle", "line", "arrow", "text", "image", "sticky"],
       required: true
     },
     x: { type: Number, required: true },
@@ -22,18 +22,28 @@ const elementSchema = new Schema(
     height: { type: Number, required: true },
     strokeColor: { type: String, required: true },
     strokeWidth: { type: Number, required: true },
+    fillColor: { type: String, default: "transparent" },
+    text: { type: String },
+    fontSize: { type: Number },
+    imageUrl: { type: String },
+    opacity: { type: Number, default: 1 },
+    isLocked: { type: Boolean, default: false },
     points: { type: [pointSchema], default: [] }
   },
-  { _id: false }
+  { _id: false, strict: "throw" }
 );
 
 const boardSchema = new Schema(
   {
     id: { type: String, required: true, unique: true, index: true },
+    version: { type: Number, default: 0, required: true },
+    ownerId: { type: String },
+    shareToken: { type: String },
     elements: { type: [elementSchema], default: [] }
   },
   {
-    timestamps: true
+    timestamps: true,
+    strict: "throw"
   }
 );
 

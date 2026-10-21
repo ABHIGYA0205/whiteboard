@@ -2,10 +2,11 @@
 
 import { TOOL_OPTIONS } from "@/components/Canvas/tools";
 import { exportSelectionToImage, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
-import { enhanceSketch } from "@/lib/api";
+import { enhanceSketch, uploadImage } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 import { useState, useEffect, useRef } from "react";
 import type { WhiteboardElement } from "@shared/types";
+import { AiImageModal } from "@/components/Modals/AiImageModal";
 import {
   MousePointer2,
   Hand,
@@ -18,7 +19,6 @@ import {
   Eraser,
   Sparkles,
   Lock,
-  Diamond,
   Image as ImageIcon,
   Trash2,
   ChevronDown,
@@ -27,7 +27,12 @@ import {
   Zap,
   Box,
   Laptop,
-  Paintbrush
+  Paintbrush,
+  StickyNote,
+  Crosshair,
+  LayoutTemplate,
+  Workflow,
+  Check
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -39,12 +44,14 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   line: <Minus size={18} />,
   arrow: <MoveUpRight size={18} />,
   text: <Type size={18} />,
+  sticky: <StickyNote size={18} />,
+  image: <ImageIcon size={18} />,
   eraser: <Eraser size={18} />,
-  image: <ImageIcon size={18} />
+  laser: <Crosshair size={18} />
 };
 
-const COLORS = [
-  { name: "White", value: "#ececf1" },
+const getPaletteColors = (theme: "dark" | "light") => [
+  { name: theme === "light" ? "Black" : "White", value: theme === "light" ? "#1e293b" : "#ececf1" },
   { name: "Red", value: "#ff4444" },
   { name: "Orange", value: "#ff9500" },
   { name: "Yellow", value: "#ffcc00" },
@@ -76,24 +83,33 @@ const STYLE_ICONS: Record<string, React.ReactNode> = {
 
 type ToolbarProps = {
   collaboration?: {
+    emitDraw: (element: WhiteboardElement) => void;
     emitReplace: (elements: WhiteboardElement[]) => void;
     emitElementUpdate: (element: WhiteboardElement) => void;
   };
+  onOpenTemplates?: () => void;
+  onOpenAiDiagram?: () => void;
 };
 
-export function Toolbar({ collaboration }: ToolbarProps) {
+export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: ToolbarProps) {
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [enhanceProgress, setEnhanceProgress] = useState(0);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [timer, setTimer] = useState(0);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
-  // Style selector states
   const [selectedStyle, setSelectedStyle] = useState(ENHANCE_STYLES[0]);
   const [showStyleMenu, setShowStyleMenu] = useState(false);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isAiImageModalOpen, setIsAiImageModalOpen] = useState(false);
+  const [modalPrompt, setModalPrompt] = useState("");
+  const [modalSketchBase64, setModalSketchBase64] = useState<string | undefined>(undefined);
+  const [modalCluster, setModalCluster] = useState<WhiteboardElement[]>([]);
+  const [modalBounds, setModalBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
-  // Close style menu when clicking outside of it
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -118,8 +134,10 @@ export function Toolbar({ collaboration }: ToolbarProps) {
   }, [isEnhancing]);
 
   const strokeColor = useBoardStore((state) => state.strokeColor);
+  const theme = useBoardStore((state) => state.theme);
   const setStrokeColor = useBoardStore((state) => state.setStrokeColor);
   const selectedElementId = useBoardStore((state) => state.selectedElementId);
+  const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const tool = useBoardStore((state) => state.tool);
   const setTool = useBoardStore((state) => state.setTool);
   const elements = useBoardStore((state) => state.elements);
@@ -129,9 +147,60 @@ export function Toolbar({ collaboration }: ToolbarProps) {
   const isLocked = useBoardStore((state) => state.isLocked);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
   const clearBoard = useBoardStore((state) => state.clearBoard);
+  const viewport = useBoardStore((state) => state.viewport);
 
-  const handleEnhance = async () => {
-    // 1. Gather all drawing elements
+  // A6.4: Image Tool upload handler
+  const handleImageFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target?.result as string;
+      if (!dataUrl) return;
+
+      try {
+        let finalUrl = dataUrl;
+        try {
+          const uploadRes = await uploadImage(dataUrl);
+          if (uploadRes?.url) {
+            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
+            finalUrl = uploadRes.url.startsWith("http") ? uploadRes.url : `${apiBase}${uploadRes.url}`;
+          }
+        } catch {
+          // Fall back to direct data URL if server upload endpoint is unavailable
+        }
+
+        const worldX = -viewport.x / viewport.zoom + 150;
+        const worldY = -viewport.y / viewport.zoom + 150;
+
+        const imageElement: WhiteboardElement = {
+          id: crypto.randomUUID(),
+          type: "image",
+          x: worldX,
+          y: worldY,
+          width: 320,
+          height: 240,
+          strokeColor: "#ffffff",
+          strokeWidth: 1,
+          imageUrl: finalUrl,
+          points: []
+        };
+
+        const nextElements = [...elements, imageElement];
+        commitElements(nextElements);
+        collaboration?.emitDraw(imageElement);
+        setTool("select");
+        selectElement(imageElement.id);
+      } catch (err) {
+        console.error("Failed to load image", err);
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
+  const handleEnhance = () => {
     const drawingElements = elements.filter(
       (el) =>
         el.type === "pencil" ||
@@ -141,15 +210,6 @@ export function Toolbar({ collaboration }: ToolbarProps) {
         el.type === "arrow"
     );
 
-    if (drawingElements.length === 0) {
-      setEnhanceError("Draw something first!");
-      setTimeout(() => setEnhanceError(null), 3000);
-      return;
-    }
-
-    // 2. Identify the active seed element to start clustering.
-    // If the user has selected a drawing element, start there.
-    // Otherwise, start with the most recently drawn element.
     let seedElement = drawingElements[drawingElements.length - 1];
     if (selectedElementId) {
       const selected = drawingElements.find((el) => el.id === selectedElementId);
@@ -158,164 +218,162 @@ export function Toolbar({ collaboration }: ToolbarProps) {
       }
     }
 
-    // Helper to calculate bounding box bounds
-    const getBoundingBox = (el: WhiteboardElement) => {
-      const bounds = getNormalizedBounds(el);
-      if (el.type === "pencil") {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const pt of el.points) {
-          minX = Math.min(minX, pt.x);
-          minY = Math.min(minY, pt.y);
-          maxX = Math.max(maxX, pt.x);
-          maxY = Math.max(maxY, pt.y);
-        }
-        return { minX, minY, maxX, maxY };
-      } else {
-        return {
-          minX: bounds.x,
-          minY: bounds.y,
-          maxX: bounds.x + bounds.width,
-          maxY: bounds.y + bounds.height
-        };
-      }
-    };
+    let detectedPrompt = "";
+    let sketchBase64: string | undefined = undefined;
+    let clusterElements: WhiteboardElement[] = [];
+    let bounds = null;
 
-    const getBoxCenter = (box: { minX: number; minY: number; maxX: number; maxY: number }) => {
-      return {
+    if (seedElement) {
+      const getBoundingBox = (el: WhiteboardElement) => {
+        const b = getNormalizedBounds(el);
+        if (el.type === "pencil") {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const pt of el.points) {
+            minX = Math.min(minX, pt.x);
+            minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x);
+            maxY = Math.max(maxY, pt.y);
+          }
+          return { minX, minY, maxX, maxY };
+        } else {
+          return {
+            minX: b.x,
+            minY: b.y,
+            maxX: b.x + b.width,
+            maxY: b.y + b.height
+          };
+        }
+      };
+
+      const getBoxCenter = (box: { minX: number; minY: number; maxX: number; maxY: number }) => ({
         x: (box.minX + box.maxX) / 2,
         y: (box.minY + box.maxY) / 2
+      });
+
+      const cluster = [seedElement];
+      const remaining = drawingElements.filter((el) => el.id !== seedElement.id);
+      const queue = [seedElement];
+      const MAX_CLUSTER_DISTANCE = 400;
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        const currentBox = getBoundingBox(current);
+        const currentCenter = getBoxCenter(currentBox);
+
+        for (let i = remaining.length - 1; i >= 0; i--) {
+          const candidate = remaining[i];
+          const candidateBox = getBoundingBox(candidate);
+          const candidateCenter = getBoxCenter(candidateBox);
+
+          const distance = Math.hypot(
+            currentCenter.x - candidateCenter.x,
+            currentCenter.y - candidateCenter.y
+          );
+
+          if (distance < MAX_CLUSTER_DISTANCE) {
+            cluster.push(candidate);
+            queue.push(candidate);
+            remaining.splice(i, 1);
+          }
+        }
+      }
+
+      clusterElements = cluster;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const el of cluster) {
+        const box = getBoundingBox(el);
+        minX = Math.min(minX, box.minX);
+        minY = Math.min(minY, box.minY);
+        maxX = Math.max(maxX, box.maxX);
+        maxY = Math.max(maxY, box.maxY);
+      }
+
+      bounds = {
+        x: minX,
+        y: minY,
+        width: Math.max(maxX - minX, 240),
+        height: Math.max(maxY - minY, 240)
       };
-    };
 
-    // 3. Spatially cluster drawings using BFS (threshold of 400px)
-    const cluster = [seedElement];
-    const remaining = drawingElements.filter((el) => el.id !== seedElement.id);
-    const queue = [seedElement];
-    const MAX_CLUSTER_DISTANCE = 400;
+      sketchBase64 = exportSelectionToImage(cluster) || undefined;
 
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      const currentBox = getBoundingBox(current);
-      const currentCenter = getBoxCenter(currentBox);
+      const textElements = elements.filter(
+        (el) =>
+          (el.type === "text" || el.type === "sticky" || el.type === "rectangle") &&
+          el.text?.trim()
+      );
 
-      for (let i = remaining.length - 1; i >= 0; i--) {
-        const candidate = remaining[i];
-        const candidateBox = getBoundingBox(candidate);
-        const candidateCenter = getBoxCenter(candidateBox);
+      if (textElements.length > 0) {
+        const clusterCenter = {
+          x: (minX + maxX) / 2,
+          y: (minY + maxY) / 2
+        };
 
-        const distance = Math.hypot(
-          currentCenter.x - candidateCenter.x,
-          currentCenter.y - candidateCenter.y
-        );
+        let minDistance = Infinity;
+        for (const textEl of textElements) {
+          const textBox = getBoundingBox(textEl);
+          const textCenter = getBoxCenter(textBox);
+          const distance = Math.hypot(
+            clusterCenter.x - textCenter.x,
+            clusterCenter.y - textCenter.y
+          );
 
-        if (distance < MAX_CLUSTER_DISTANCE) {
-          cluster.push(candidate);
-          queue.push(candidate);
-          remaining.splice(i, 1);
+          if (distance < minDistance && textEl.text) {
+            minDistance = distance;
+            detectedPrompt = textEl.text.trim();
+          }
         }
       }
     }
 
-    // 4. Find all text elements with content
-    const textElements = elements.filter(
-      (el) => el.type === "text" && el.text?.trim()
-    );
+    setModalPrompt(detectedPrompt);
+    setModalSketchBase64(sketchBase64);
+    setModalCluster(clusterElements);
+    setModalBounds(bounds);
+    setIsAiImageModalOpen(true);
+  };
 
-    if (textElements.length === 0) {
-      setEnhanceError("Add a text prompt next to your drawing!");
-      setTimeout(() => setEnhanceError(null), 3500);
-      return;
-    }
+  const handleImageGenerated = (imageUrl: string, width: number, height: number) => {
+    const originX = modalBounds ? modalBounds.x : -viewport.x / viewport.zoom + 220;
+    const originY = modalBounds ? modalBounds.y : -viewport.y / viewport.zoom + 160;
+    const finalWidth = modalBounds ? modalBounds.width : width;
+    const finalHeight = modalBounds ? modalBounds.height : height;
 
-    // 5. Calculate cluster bounding box
-    let clusterMinX = Infinity, clusterMinY = Infinity, clusterMaxX = -Infinity, clusterMaxY = -Infinity;
-    for (const el of cluster) {
-      const box = getBoundingBox(el);
-      clusterMinX = Math.min(clusterMinX, box.minX);
-      clusterMinY = Math.min(clusterMinY, box.minY);
-      clusterMaxX = Math.max(clusterMaxX, box.maxX);
-      clusterMaxY = Math.max(clusterMaxY, box.maxY);
-    }
-    const clusterCenter = {
-      x: (clusterMinX + clusterMaxX) / 2,
-      y: (clusterMinY + clusterMaxY) / 2
+    const imgEl: WhiteboardElement = {
+      id: crypto.randomUUID(),
+      type: "image",
+      x: originX,
+      y: originY,
+      width: finalWidth,
+      height: finalHeight,
+      strokeColor: "#ffffff",
+      strokeWidth: 1,
+      imageUrl,
+      points: []
     };
 
-    // 6. Find the closest text element to the cluster center
-    let closestTextElement: WhiteboardElement | null = null;
-    let minDistance = Infinity;
-
-    for (const textEl of textElements) {
-      const textBox = getBoundingBox(textEl);
-      const textCenter = getBoxCenter(textBox);
-      const distance = Math.hypot(
-        clusterCenter.x - textCenter.x,
-        clusterCenter.y - textCenter.y
-      );
-
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestTextElement = textEl;
-      }
+    let nextElements: WhiteboardElement[];
+    if (modalCluster.length > 0) {
+      const clusterIds = new Set(modalCluster.map((el) => el.id));
+      nextElements = elements.filter((el) => !clusterIds.has(el.id));
+      nextElements.push(imgEl);
+    } else {
+      nextElements = [...elements, imgEl];
     }
 
-    if (!closestTextElement || !closestTextElement.text?.trim()) {
-      setEnhanceError("Add a text prompt next to your drawing!");
-      setTimeout(() => setEnhanceError(null), 3500);
-      return;
-    }
-
-    setIsEnhancing(true);
-    setEnhanceError(null);
-
-    try {
-      const imageBase64 = exportSelectionToImage(cluster);
-      if (!imageBase64) throw new Error("Capture failed.");
-
-      // Combine user text prompt with the premium style suffix
-      const userPrompt = closestTextElement.text.trim();
-      const styledPrompt = `${userPrompt}, ${selectedStyle.promptSuffix}`;
-
-      const result = await enhanceSketch(imageBase64, styledPrompt);
-
-      const imageElement = {
-        id: crypto.randomUUID(),
-        type: "image" as const,
-        x: clusterMinX,
-        y: clusterMinY,
-        width: Math.max(clusterMaxX - clusterMinX, 200),
-        height: Math.max(clusterMaxY - clusterMinY, 200),
-        strokeColor: "#ffffff",
-        strokeWidth: 1,
-        imageUrl: result.imageUrl,
-        points: []
-      };
-
-      // Replace ONLY the sketch elements of the active cluster!
-      const clusterIds = new Set(cluster.map((el) => el.id));
-      const nextElements = elements.filter((el) => !clusterIds.has(el.id));
-      nextElements.push(imageElement);
-
-      commitElements(nextElements);
-      collaboration?.emitReplace(nextElements);
-
-      // Automatically switch active tool to SELECT and highlight the new image!
-      setTool("select");
-      selectElement(imageElement.id);
-    } catch (error) {
-      setEnhanceError(error instanceof Error ? error.message : "AI failed.");
-      setTimeout(() => setEnhanceError(null), 5000);
-    } finally {
-      setIsEnhancing(false);
-    }
+    commitElements(nextElements);
+    collaboration?.emitReplace?.(nextElements);
+    setTool("select");
+    selectElement(imgEl.id);
   };
 
   const handleColorChange = (color: string) => {
     setStrokeColor(color);
-    
-    if (selectedElementId) {
-      const nextElements = elements.map((el) => 
-        el.id === selectedElementId ? { ...el, strokeColor: color } : el
+    if (selectedElementIds.length > 0) {
+      const idSet = new Set(selectedElementIds);
+      const nextElements = elements.map((el) =>
+        idSet.has(el.id) ? { ...el, strokeColor: color } : el
       );
       setElements(nextElements);
       commitElements(nextElements);
@@ -325,111 +383,155 @@ export function Toolbar({ collaboration }: ToolbarProps) {
 
   return (
     <>
-      <nav className="top-toolbar">
-        <button 
-          className={`tool-button ${isLocked ? "active" : ""}`} 
+      <input
+        type="file"
+        ref={imageInputRef}
+        style={{ display: "none" }}
+        accept="image/*"
+        onChange={handleImageFileChange}
+      />
+
+      <nav className="top-toolbar" aria-label="Drawing tools and controls">
+        <button
+          className={`tool-button ${isLocked ? "active" : ""}`}
           title={isLocked ? "Unlock Canvas" : "Lock Canvas"}
+          aria-label={isLocked ? "Unlock Canvas" : "Lock Canvas"}
           onClick={() => setIsLocked(!isLocked)}
         >
           <Lock size={16} />
         </button>
-        
-        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+
+        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
 
         {TOOL_OPTIONS.map((option) => (
           <button
             className={`tool-button ${tool === option.id ? "active" : ""}`}
             key={option.id}
-            onClick={() => setTool(option.id)}
-            title={option.label}
+            onClick={() => {
+              if (option.id === "image") {
+                imageInputRef.current?.click();
+              } else {
+                setTool(option.id);
+              }
+            }}
+            title={`${option.label} (${option.shortcut})`}
+            aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
           >
             {TOOL_ICONS[option.id]}
             <span className="tool-shortcut">{option.shortcut}</span>
           </button>
         ))}
 
-        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "var(--panel-border)" }} />
 
-        <div className="color-picker-container">
-          {COLORS.map((c) => (
+        <div className="color-picker-container" role="group" aria-label="Stroke color selection">
+          {getPaletteColors(theme).slice(0, 5).map((c) => (
             <button
               key={c.value}
               className={`color-swatch ${strokeColor === c.value ? "active" : ""}`}
               style={{ backgroundColor: c.value }}
               onClick={() => handleColorChange(c.value)}
               title={c.name}
+              aria-label={`Select ${c.name} stroke color`}
             />
           ))}
           <div className="color-divider" />
-          <input 
-            type="color" 
-            className="custom-color-input" 
-            value={strokeColor.startsWith('#') ? strokeColor : '#ffffff'} 
+          <input
+            type="color"
+            className="custom-color-input"
+            value={strokeColor.startsWith("#") ? strokeColor : (theme === "light" ? "#1e293b" : "#ececf1")}
             onChange={(e) => handleColorChange(e.target.value)}
             title="Custom Color"
+            aria-label="Custom color picker"
           />
         </div>
 
-        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "var(--panel-border)" }} />
 
-        {/* Premium AI Enhancer and Style Selector */}
-        <div style={{ position: "relative", display: "flex", gap: "2px" }} ref={dropdownRef}>
-          <button 
-            className={`tool-button ai-button ${isEnhancing ? "enhancing" : ""}`}
+        {/* AI Enhancer and Style Selector */}
+        <div className="ai-enhancer-group" ref={dropdownRef}>
+          <button
+            className={`ai-trigger-button ${isEnhancing ? "enhancing" : ""}`}
             onClick={handleEnhance}
             disabled={isEnhancing}
-            title={`Enhance sketch using ${selectedStyle.label}`}
-            style={{ 
-              borderTopRightRadius: 0, 
-              borderBottomRightRadius: 0,
-              paddingRight: '6px',
-              paddingLeft: '8px'
-            }}
+            title={`Enhance sketch with AI (${selectedStyle.label})`}
+            aria-label={`Enhance sketch with AI using ${selectedStyle.label}`}
           >
-            <Sparkles size={16} style={{ marginRight: '4px' }} />
-            <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em' }}>
-              {selectedStyle.label.split(" ")[0]}
-            </span>
+            <Sparkles size={14} className="ai-sparkle-icon" />
+            <span className="ai-btn-text">Enhance</span>
+            <span className="ai-style-pill">{selectedStyle.label}</span>
           </button>
-          
+
           <button
-            className="tool-button ai-button"
+            className={`ai-dropdown-trigger ${showStyleMenu ? "active" : ""}`}
             disabled={isEnhancing}
-            onClick={() => setShowStyleMenu(!showStyleMenu)}
-            title="Choose AI Style Preset"
-            style={{ 
-              width: '20px',
-              borderTopLeftRadius: 0, 
-              borderBottomLeftRadius: 0,
-              borderLeft: '1px solid rgba(255,255,255,0.2)',
-              padding: 0
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowStyleMenu(!showStyleMenu);
             }}
+            title="Select AI Art Style Preset"
+            aria-label="Select AI Art Style Preset"
+            aria-expanded={showStyleMenu}
           >
-            <ChevronDown size={12} />
+            <ChevronDown size={13} className={`chevron-icon ${showStyleMenu ? "rotate" : ""}`} />
           </button>
 
           {showStyleMenu && (
-            <div className="style-dropdown-menu">
-              {ENHANCE_STYLES.map((style) => (
-                <button
-                  key={style.id}
-                  className={`style-dropdown-item ${selectedStyle.id === style.id ? "active" : ""}`}
-                  onClick={() => {
-                    setSelectedStyle(style);
-                    setShowStyleMenu(false);
-                  }}
-                >
-                  <span className="style-icon">{STYLE_ICONS[style.id]}</span>
-                  <span>{style.label}</span>
-                </button>
-              ))}
+            <div className="style-dropdown-menu" role="menu" aria-label="AI Style presets">
+              <div className="style-dropdown-header">AI Art Style Preset</div>
+              <div className="style-dropdown-list">
+                {ENHANCE_STYLES.map((style) => {
+                  const isSelected = selectedStyle.id === style.id;
+                  return (
+                    <button
+                      key={style.id}
+                      className={`style-dropdown-item ${isSelected ? "active" : ""}`}
+                      onClick={() => {
+                        setSelectedStyle(style);
+                        setShowStyleMenu(false);
+                      }}
+                      role="menuitem"
+                      aria-label={style.label}
+                    >
+                      <span className="style-icon">{STYLE_ICONS[style.id]}</span>
+                      <div className="style-info">
+                        <span className="style-name">{style.label}</span>
+                        <span className="style-desc">{style.promptSuffix.split(",")[0]}</span>
+                      </div>
+                      {isSelected && <Check size={14} className="style-check-icon" />}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
 
-        <div className="menu-divider" style={{ width: '1px', height: '24px', margin: '0 4px', background: 'rgba(255,255,255,0.1)' }} />
+        {/* Templates gallery button */}
+        <button
+          className="tool-button"
+          onClick={onOpenTemplates}
+          title="Whiteboard Templates (Flowchart, Kanban, Retro, Mind Map)"
+          aria-label="Open Whiteboard Templates"
+        >
+          <LayoutTemplate size={16} />
+        </button>
 
-        <button 
+        {/* AI Prompt to Diagram button */}
+        <button
+          className="tool-button"
+          onClick={onOpenAiDiagram}
+          title="AI Prompt → Editable Diagram"
+          aria-label="Generate editable diagram from text prompt"
+          style={{ color: "#a5b4fc" }}
+        >
+          <Workflow size={16} />
+        </button>
+
+        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
+
+        {/* A1.4: Confirm before destructive clear */}
+        <button
           className="tool-button"
           onClick={() => {
             if (showClearConfirm) {
@@ -437,67 +539,127 @@ export function Toolbar({ collaboration }: ToolbarProps) {
               setShowClearConfirm(false);
             } else {
               setShowClearConfirm(true);
-              setTimeout(() => setShowClearConfirm(false), 3000);
+              setTimeout(() => setShowClearConfirm(false), 3500);
             }
           }}
-          title="Clear Canvas"
-          style={{ width: showClearConfirm ? '60px' : '36px', transition: 'width 0.2s ease' }}
+          title={showClearConfirm ? "Click again to confirm clearing board" : "Clear Canvas"}
+          aria-label={showClearConfirm ? "Confirm clear canvas" : "Clear Canvas"}
+          style={{ width: showClearConfirm ? "68px" : "36px", transition: "width 0.2s ease" }}
         >
           {showClearConfirm ? (
-            <span style={{ fontSize: '10px', color: '#ff4444', fontWeight: 800 }}>SURE?</span>
+            <span style={{ fontSize: "10px", color: "#ff4444", fontWeight: 800 }}>CONFIRM?</span>
           ) : (
             <Trash2 size={18} color="#ff4444" />
           )}
         </button>
-
-        {isEnhancing && (
-          <div className="status-banner" style={{ background: 'rgba(105, 101, 219, 0.9)', color: '#fff', borderColor: 'rgba(255, 255, 255, 0.2)' }}>
-            <Sparkles size={14} className="enhancing" style={{ marginRight: '8px' }} />
-            AI is enhancing your sketch...
-          </div>
-        )}
-
-        {enhanceError && (
-          <div className="status-banner">
-            {enhanceError}
-          </div>
-        )}
       </nav>
 
+      {/* Single clean floating progress toast below the toolbar */}
       {isEnhancing && (
-        <div style={{
-          position: 'fixed',
-          bottom: '24px',
-          right: '24px',
-          background: 'rgba(23, 23, 23, 0.95)',
-          backdropFilter: 'blur(12px)',
-          border: '1px solid rgba(105, 101, 219, 0.4)',
-          padding: '16px 20px',
-          borderRadius: '16px',
-          zIndex: 1000,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-          width: '240px',
-          boxShadow: '0 12px 48px rgba(0, 0, 0, 0.5)'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Generating Image</span>
-            <span style={{ fontSize: '12px', color: '#a5a6f6', fontWeight: 700 }}>~{timer}s</span>
+        <div
+          style={{
+            position: "fixed",
+            top: "68px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(18, 18, 26, 0.95)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            border: "1px solid rgba(168, 85, 247, 0.4)",
+            padding: "10px 16px",
+            borderRadius: "14px",
+            zIndex: 120,
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            width: "300px",
+            maxWidth: "calc(100vw - 32px)",
+            boxShadow: "0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(124, 58, 237, 0.2)",
+            animation: "slideDownMenu 0.2s cubic-bezier(0.16, 1, 0.3, 1)"
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Sparkles size={14} className="enhancing" style={{ color: "#d946ef" }} />
+              <span style={{ fontSize: "12px", fontWeight: 700, color: "#fff" }}>
+                AI Refining Sketch
+              </span>
+            </div>
+            <span style={{ fontSize: "11px", color: "#d8b4fe", fontWeight: 700 }}>
+              {enhanceProgress > 0 ? `${enhanceProgress}%` : `~${timer}s`}
+            </span>
           </div>
-          <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
-            <div style={{ 
-              width: `${((30 - timer) / 30) * 100}%`, 
-              height: '100%', 
-              background: 'linear-gradient(90deg, #6965db, #ff6b6b)',
-              transition: 'width 1s linear'
-            }} />
+
+          <div style={{ width: "100%", height: "4px", background: "rgba(255, 255, 255, 0.1)", borderRadius: "2px", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${enhanceProgress > 0 ? enhanceProgress : ((30 - timer) / 30) * 100}%`,
+                height: "100%",
+                background: "linear-gradient(90deg, #8b5cf6, #ec4899)",
+                borderRadius: "2px",
+                transition: "width 0.4s ease"
+              }}
+            />
           </div>
-          <p style={{ margin: 0, fontSize: '11px', color: '#9ba1b0' }}>
-            Our AI models are refining your sketch into a professional illustration ({selectedStyle.label}).
-          </p>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "10px", color: "#9ca3af" }}>
+            <span>Style: {selectedStyle.label}</span>
+            <button
+              onClick={() => setIsEnhancing(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#6b7280",
+                fontSize: "10px",
+                cursor: "pointer",
+                padding: "0 2px"
+              }}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
+
+      {/* Floating error notification below toolbar */}
+      {enhanceError && (
+        <div
+          style={{
+            position: "fixed",
+            top: "68px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(38, 18, 22, 0.95)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            border: "1px solid rgba(239, 68, 68, 0.5)",
+            color: "#fca5a5",
+            padding: "8px 16px",
+            borderRadius: "10px",
+            fontSize: "12px",
+            fontWeight: 500,
+            zIndex: 120,
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}
+          role="alert"
+        >
+          <span>{enhanceError}</span>
+        </div>
+      )}
+
+      {/* Modern AI Image Generation & Enhancement Modal */}
+      <AiImageModal
+        isOpen={isAiImageModalOpen}
+        onClose={() => setIsAiImageModalOpen(false)}
+        initialPrompt={modalPrompt}
+        sketchBase64={modalSketchBase64}
+        onGenerate={handleImageGenerated}
+      />
     </>
   );
 }

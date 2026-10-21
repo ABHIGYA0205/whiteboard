@@ -3,25 +3,45 @@
 import type {
   CanvasViewport,
   CursorPosition,
+  PresenceUser,
   ToolType,
-  WhiteboardElement
+  WhiteboardElement,
+  Point
 } from "@shared/types";
 import { create } from "zustand";
+
+type StoredCursor = CursorPosition & { lastSeen: number };
+
+export type LaserPoint = {
+  x: number;
+  y: number;
+  time: number;
+  color: string;
+};
 
 type BoardState = {
   elements: WhiteboardElement[];
   history: WhiteboardElement[][];
   future: WhiteboardElement[][];
+  clipboard: WhiteboardElement[];
+  version: number;
   tool: ToolType;
   strokeColor: string;
   fillColor: string;
   strokeWidth: number;
   selectedElementId: string | null;
+  selectedElementIds: string[];
   editingElementId: string | null;
   viewport: CanvasViewport;
-  remoteCursors: Record<string, CursorPosition>;
+  remoteCursors: Record<string, StoredCursor>;
+  presenceUsers: PresenceUser[];
+  followingUserId: string | null;
+  laserPoints: LaserPoint[];
+  theme: "dark" | "light";
   isLocked: boolean;
   setIsLocked: (isLocked: boolean) => void;
+  setTheme: (theme: "dark" | "light") => void;
+  setVersion: (version: number) => void;
   setTool: (tool: ToolType) => void;
   setStrokeColor: (color: string) => void;
   setFillColor: (color: string) => void;
@@ -32,36 +52,72 @@ type BoardState = {
     elements: WhiteboardElement[],
     previousElements?: WhiteboardElement[]
   ) => void;
-  loadBoard: (elements: WhiteboardElement[]) => void;
+  loadBoard: (elements: WhiteboardElement[], version?: number) => void;
   replaceElements: (elements: WhiteboardElement[]) => void;
-  syncElements: (elements: WhiteboardElement[]) => void;
-  selectElement: (id: string | null) => void;
+  syncElements: (elements: WhiteboardElement[], version?: number) => void;
+  selectElement: (id: string | null | string[]) => void;
   deleteSelected: () => WhiteboardElement[] | null;
-  eraseAtPoint: (point: { x: number; y: number }, hitTest: (point: { x: number; y: number }, element: WhiteboardElement) => boolean) => WhiteboardElement[] | null;
+  copySelected: () => void;
+  paste: (offset?: Point) => WhiteboardElement[] | null;
+  duplicateSelected: () => WhiteboardElement[] | null;
+  bringForward: () => WhiteboardElement[] | null;
+  sendBackward: () => WhiteboardElement[] | null;
+  bringToFront: () => WhiteboardElement[] | null;
+  sendToBack: () => WhiteboardElement[] | null;
+  eraseAtPoint: (
+    point: { x: number; y: number },
+    hitTest: (point: { x: number; y: number }, element: WhiteboardElement) => boolean
+  ) => WhiteboardElement[] | null;
   clearBoard: () => void;
-  undo: () => void;
-  redo: () => void;
+  undo: () => WhiteboardElement[] | null;
+  redo: () => WhiteboardElement[] | null;
   setViewport: (viewport: CanvasViewport) => void;
   resetViewport: () => void;
   setZoom: (zoom: number) => void;
   upsertRemoteElement: (element: WhiteboardElement) => void;
   upsertRemoteCursor: (cursor: CursorPosition) => void;
+  removeRemoteCursor: (userId: string) => void;
+  cleanStaleCursors: () => void;
+  setPresenceUsers: (users: PresenceUser[]) => void;
+  addPresenceUser: (user: PresenceUser) => void;
+  removePresenceUser: (userId: string) => void;
+  setFollowingUserId: (id: string | null) => void;
+  addLaserPoint: (point: Point, color?: string) => void;
+  clearExpiredLaserPoints: () => void;
 };
 
-export const useBoardStore = create<BoardState>((set) => ({
+export const useBoardStore = create<BoardState>((set, get) => ({
   elements: [],
   history: [],
   future: [],
+  clipboard: [],
+  version: 0,
   tool: "pencil",
   strokeColor: "#ececf1",
   fillColor: "transparent",
   strokeWidth: 2,
   selectedElementId: null,
+  selectedElementIds: [],
   editingElementId: null,
   viewport: { x: 0, y: 0, zoom: 1 },
   remoteCursors: {},
+  presenceUsers: [],
+  followingUserId: null,
+  laserPoints: [],
+  theme: "dark",
   isLocked: false,
   setIsLocked: (isLocked) => set({ isLocked }),
+  setVersion: (version) => set({ version }),
+  setTheme: (theme) =>
+    set((state) => {
+      let nextStroke = state.strokeColor;
+      if (theme === "light" && (state.strokeColor === "#ececf1" || state.strokeColor === "#ffffff" || state.strokeColor === "#fff")) {
+        nextStroke = "#1e293b";
+      } else if (theme === "dark" && (state.strokeColor === "#1e293b" || state.strokeColor === "#0f172a" || state.strokeColor === "#000000")) {
+        nextStroke = "#ececf1";
+      }
+      return { theme, strokeColor: nextStroke };
+    }),
   setTool: (tool) => set({ tool }),
   setStrokeColor: (strokeColor) => set({ strokeColor }),
   setFillColor: (fillColor) => set({ fillColor }),
@@ -74,12 +130,14 @@ export const useBoardStore = create<BoardState>((set) => ({
       history: [...state.history, previousElements ?? state.elements],
       future: []
     })),
-  loadBoard: (elements) =>
+  loadBoard: (elements, version = 0) =>
     set({
       elements,
+      version,
       history: [],
       future: [],
-      selectedElementId: null
+      selectedElementId: null,
+      selectedElementIds: []
     }),
   replaceElements: (elements) =>
     set((state) => ({
@@ -87,32 +145,206 @@ export const useBoardStore = create<BoardState>((set) => ({
       history: [...state.history, state.elements],
       future: []
     })),
-  syncElements: (elements) =>
-    set({
-      elements,
-      selectedElementId: null
-    }),
-  selectElement: (selectedElementId) => set({ selectedElementId }),
-  deleteSelected: () => {
-    let nextElements: WhiteboardElement[] | null = null;
-
+  syncElements: (incomingElements, version) =>
     set((state) => {
-      if (!state.selectedElementId) {
-        return state;
+      const activeEditId = state.editingElementId;
+      const remoteMap = new Map(incomingElements.map((el) => [el.id, el]));
+
+      const nextElements = incomingElements.map((remoteEl) => {
+        if (remoteEl.id === activeEditId) {
+          const localActive = state.elements.find((e) => e.id === activeEditId);
+          return localActive || remoteEl;
+        }
+        return remoteEl;
+      });
+
+      if (activeEditId && !remoteMap.has(activeEditId)) {
+        const localActive = state.elements.find((e) => e.id === activeEditId);
+        if (localActive) {
+          nextElements.push(localActive);
+        }
       }
 
-      nextElements = state.elements.filter(
-        (element) => element.id !== state.selectedElementId
-      );
-
+      return {
+        elements: nextElements,
+        ...(version !== undefined ? { version } : {}),
+        selectedElementId: activeEditId ? state.selectedElementId : null,
+        selectedElementIds: activeEditId ? state.selectedElementIds : []
+      };
+    }),
+  selectElement: (payload) =>
+    set(() => {
+      if (!payload) {
+        return { selectedElementId: null, selectedElementIds: [] };
+      }
+      if (Array.isArray(payload)) {
+        return {
+          selectedElementIds: payload,
+          selectedElementId: payload[0] ?? null
+        };
+      }
+      return {
+        selectedElementId: payload,
+        selectedElementIds: [payload]
+      };
+    }),
+  deleteSelected: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const toDelete = new Set(state.selectedElementIds);
+      nextElements = state.elements.filter((element) => !toDelete.has(element.id));
       return {
         elements: nextElements,
         history: [...state.history, state.elements],
         future: [],
-        selectedElementId: null
+        selectedElementId: null,
+        selectedElementIds: []
       };
     });
+    return nextElements;
+  },
+  // F1.2: Copy selected elements to clipboard
+  copySelected: () => {
+    const state = get();
+    if (state.selectedElementIds.length === 0) return;
+    const idSet = new Set(state.selectedElementIds);
+    const selected = state.elements.filter((el) => idSet.has(el.id));
+    if (selected.length > 0) {
+      set({ clipboard: selected.map((item) => ({ ...item, points: item.points ? [...item.points] : [] })) });
+    }
+  },
+  // F1.2: Paste elements from clipboard
+  paste: (offset = { x: 20, y: 20 }) => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.clipboard.length === 0) return state;
+      const clones = state.clipboard.map((item) => ({
+        ...item,
+        id: crypto.randomUUID(),
+        x: item.x + offset.x,
+        y: item.y + offset.y,
+        points: item.points.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }))
+      }));
 
+      nextElements = [...state.elements, ...clones];
+      const cloneIds = clones.map((c) => c.id);
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: [],
+        selectedElementIds: cloneIds,
+        selectedElementId: cloneIds[0] ?? null
+      };
+    });
+    return nextElements;
+  },
+  // F1.2: Duplicate selected elements
+  duplicateSelected: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const idSet = new Set(state.selectedElementIds);
+      const toClone = state.elements.filter((item) => idSet.has(item.id));
+      if (toClone.length === 0) return state;
+
+      const offset = 24;
+      const clones: WhiteboardElement[] = toClone.map((el) => ({
+        ...el,
+        id: crypto.randomUUID(),
+        x: el.x + offset,
+        y: el.y + offset,
+        points: el.points.map((p) => ({ x: p.x + offset, y: p.y + offset }))
+      }));
+
+      nextElements = [...state.elements, ...clones];
+      const cloneIds = clones.map((c) => c.id);
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: [],
+        selectedElementIds: cloneIds,
+        selectedElementId: cloneIds[0] ?? null
+      };
+    });
+    return nextElements;
+  },
+  // F1.6: Z-order Bring Forward
+  bringForward: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const idSet = new Set(state.selectedElementIds);
+      nextElements = [...state.elements];
+      for (let i = nextElements.length - 2; i >= 0; i--) {
+        if (idSet.has(nextElements[i].id) && !idSet.has(nextElements[i + 1].id)) {
+          const temp = nextElements[i];
+          nextElements[i] = nextElements[i + 1];
+          nextElements[i + 1] = temp;
+        }
+      }
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: []
+      };
+    });
+    return nextElements;
+  },
+  // F1.6: Z-order Send Backward
+  sendBackward: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const idSet = new Set(state.selectedElementIds);
+      nextElements = [...state.elements];
+      for (let i = 1; i < nextElements.length; i++) {
+        if (idSet.has(nextElements[i].id) && !idSet.has(nextElements[i - 1].id)) {
+          const temp = nextElements[i];
+          nextElements[i] = nextElements[i - 1];
+          nextElements[i - 1] = temp;
+        }
+      }
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: []
+      };
+    });
+    return nextElements;
+  },
+  // F1.6: Z-order Bring to Front
+  bringToFront: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const idSet = new Set(state.selectedElementIds);
+      const moving = state.elements.filter((item) => idSet.has(item.id));
+      const rest = state.elements.filter((item) => !idSet.has(item.id));
+      nextElements = [...rest, ...moving];
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: []
+      };
+    });
+    return nextElements;
+  },
+  // F1.6: Z-order Send to Back
+  sendToBack: () => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (state.selectedElementIds.length === 0) return state;
+      const idSet = new Set(state.selectedElementIds);
+      const moving = state.elements.filter((item) => idSet.has(item.id));
+      const rest = state.elements.filter((item) => !idSet.has(item.id));
+      nextElements = [...moving, ...rest];
+      return {
+        elements: nextElements,
+        history: [...state.history, state.elements],
+        future: []
+      };
+    });
     return nextElements;
   },
   eraseAtPoint: (point, hitTest) => {
@@ -122,16 +354,13 @@ export const useBoardStore = create<BoardState>((set) => ({
         .reverse()
         .find((element) => hitTest(point, element));
 
-      if (!hoveredElement) {
-        return state;
-      }
+      if (!hoveredElement) return state;
 
-      nextElements = state.elements.filter(
-        (element) => element.id !== hoveredElement.id
-      );
-
+      nextElements = state.elements.filter((element) => element.id !== hoveredElement.id);
       return {
         elements: nextElements,
+        history: [...state.history, state.elements],
+        future: [],
         selectedElementId: null
       };
     });
@@ -144,51 +373,115 @@ export const useBoardStore = create<BoardState>((set) => ({
       future: [],
       selectedElementId: null
     })),
-  undo: () =>
+  undo: () => {
+    let updated: WhiteboardElement[] | null = null;
     set((state) => {
       const previous = state.history[state.history.length - 1];
-      if (!previous) {
-        return state;
-      }
-
+      if (!previous) return state;
+      updated = previous;
       return {
         elements: previous,
         history: state.history.slice(0, -1),
         future: [state.elements, ...state.future]
       };
-    }),
-  redo: () =>
+    });
+    return updated;
+  },
+  redo: () => {
+    let updated: WhiteboardElement[] | null = null;
     set((state) => {
       const [next, ...remaining] = state.future;
-      if (!next) {
-        return state;
-      }
-
+      if (!next) return state;
+      updated = next;
       return {
         elements: next,
         history: [...state.history, state.elements],
         future: remaining
       };
-    }),
+    });
+    return updated;
+  },
   setViewport: (viewport) => set({ viewport }),
   resetViewport: () => set({ viewport: { x: 0, y: 0, zoom: 1 } }),
   setZoom: (zoom) => set((state) => ({ viewport: { ...state.viewport, zoom } })),
   upsertRemoteElement: (element) =>
     set((state) => {
+      // If local user is actively typing in this element, preserve local text
+      if (state.editingElementId === element.id) {
+        return state;
+      }
       const index = state.elements.findIndex((candidate) => candidate.id === element.id);
       if (index === -1) {
         return { elements: [...state.elements, element] };
       }
-
       const nextElements = [...state.elements];
       nextElements[index] = element;
       return { elements: nextElements };
     }),
   upsertRemoteCursor: (cursor) =>
-    set((state) => ({
-      remoteCursors: {
+    set((state) => {
+      const updatedCursors = {
         ...state.remoteCursors,
-        [cursor.userId]: cursor
+        [cursor.userId]: { ...cursor, lastSeen: Date.now() }
+      };
+
+      let nextViewport = state.viewport;
+      if (state.followingUserId === cursor.userId) {
+        nextViewport = {
+          ...state.viewport,
+          x: -cursor.x * state.viewport.zoom + window.innerWidth / 2,
+          y: -cursor.y * state.viewport.zoom + window.innerHeight / 2
+        };
       }
-    }))
+
+      return {
+        remoteCursors: updatedCursors,
+        viewport: nextViewport
+      };
+    }),
+  removeRemoteCursor: (userId) =>
+    set((state) => {
+      const nextCursors = { ...state.remoteCursors };
+      delete nextCursors[userId];
+      return { remoteCursors: nextCursors };
+    }),
+  cleanStaleCursors: () =>
+    set((state) => {
+      const now = Date.now();
+      const nextCursors: Record<string, StoredCursor> = {};
+      let changed = false;
+      for (const [id, cursor] of Object.entries(state.remoteCursors)) {
+        if (now - cursor.lastSeen <= 15000) {
+          nextCursors[id] = cursor;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? { remoteCursors: nextCursors } : state;
+    }),
+  setPresenceUsers: (presenceUsers) => set({ presenceUsers }),
+  addPresenceUser: (user) =>
+    set((state) => ({
+      presenceUsers: [
+        ...state.presenceUsers.filter((u) => u.userId !== user.userId),
+        user
+      ]
+    })),
+  removePresenceUser: (userId) =>
+    set((state) => ({
+      presenceUsers: state.presenceUsers.filter((u) => u.userId !== userId),
+      followingUserId: state.followingUserId === userId ? null : state.followingUserId
+    })),
+  setFollowingUserId: (followingUserId) => set({ followingUserId }),
+  // F2.5: Laser pointer points
+  addLaserPoint: (point, color = "#ff0055") =>
+    set((state) => ({
+      laserPoints: [...state.laserPoints, { ...point, time: Date.now(), color }]
+    })),
+  clearExpiredLaserPoints: () =>
+    set((state) => {
+      const cutoff = Date.now() - 1200; // 1.2s laser trail
+      const valid = state.laserPoints.filter((p) => p.time > cutoff);
+      return valid.length !== state.laserPoints.length ? { laserPoints: valid } : state;
+    })
 }));

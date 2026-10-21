@@ -8,14 +8,16 @@ export type ToolType =
   | "line"
   | "arrow"
   | "text"
-  | "image";
+  | "image"
+  | "sticky"
+  | "laser";
 
 export type Point = {
   x: number;
   y: number;
 };
 
-export type ElementType = Exclude<ToolType, "select" | "pan" | "eraser">;
+export type ElementType = Exclude<ToolType, "select" | "pan" | "eraser" | "laser">;
 
 export type WhiteboardElement = {
   id: string;
@@ -30,6 +32,8 @@ export type WhiteboardElement = {
   text?: string;
   fontSize?: number;
   imageUrl?: string;
+  opacity?: number;
+  isLocked?: boolean;
   points: Point[];
 };
 
@@ -44,13 +48,29 @@ export type CursorPosition = {
   x: number;
   y: number;
   color: string;
+  name?: string;
+  lastSeen?: number;
+};
+
+export type PresenceUser = {
+  userId: string;
+  name: string;
+  color: string;
 };
 
 export type BoardDocument = {
   id: string;
+  version: number;
+  ownerId?: string;
+  shareToken?: string;
   elements: WhiteboardElement[];
   createdAt: string;
   updatedAt?: string;
+};
+
+export type BoardOp = {
+  op: "add" | "update" | "delete";
+  element: WhiteboardElement;
 };
 
 export type DrawEventPayload = {
@@ -64,3 +84,15 @@ export type CursorEventPayload = {
 };
 
 export type UpdateElementPayload = DrawEventPayload;
+
+export type PresenceLeavePayload = {
+  boardId: string;
+  userId: string;
+};
+
+export type LaserEventPayload = {
+  boardId: string;
+  userId: string;
+  point: Point;
+  color: string;
+};

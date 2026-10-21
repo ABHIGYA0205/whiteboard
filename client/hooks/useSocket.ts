@@ -4,6 +4,7 @@ import { useBoardStore } from "@/store/boardStore";
 import type {
   CursorPosition,
   DrawEventPayload,
+  PresenceUser,
   UpdateElementPayload,
   WhiteboardElement
 } from "@shared/types";
@@ -11,15 +12,32 @@ import type { Socket } from "socket.io-client";
 import { useEffect, useMemo, useRef } from "react";
 
 const THROTTLE_MS = 16;
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:4001";
+const getSocketUrl = () => {
+  const envUrl = process.env.NEXT_PUBLIC_SOCKET_URL;
+  if (envUrl && envUrl.trim() !== "") {
+    return envUrl.trim();
+  }
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    return `${protocol}//${hostname}:4001`;
+  }
+  return "http://localhost:4001";
+};
 
 export function useSocket(boardId: string) {
   const upsertRemoteElement = useBoardStore((state) => state.upsertRemoteElement);
   const upsertRemoteCursor = useBoardStore((state) => state.upsertRemoteCursor);
+  const removeRemoteCursor = useBoardStore((state) => state.removeRemoteCursor);
+  const cleanStaleCursors = useBoardStore((state) => state.cleanStaleCursors);
+  const setPresenceUsers = useBoardStore((state) => state.setPresenceUsers);
+  const addPresenceUser = useBoardStore((state) => state.addPresenceUser);
+  const removePresenceUser = useBoardStore((state) => state.removePresenceUser);
   const syncElements = useBoardStore((state) => state.syncElements);
+
   const socketRef = useRef<Socket | null>(null);
   const cursorFrameRef = useRef<number | null>(null);
+  const trailingTimerRef = useRef<number | null>(null);
   const queuedCursorRef = useRef<Omit<CursorPosition, "userId"> | null>(null);
   const lastCursorSentRef = useRef(0);
 
@@ -29,16 +47,40 @@ export function useSocket(boardId: string) {
 
     const setupSocket = async () => {
       const { io } = await import("socket.io-client");
-      if (!isMounted) {
-        return;
-      }
+      if (!isMounted) return;
 
-      activeSocket = io(SOCKET_URL, {
+      activeSocket = io(getSocketUrl(), {
         autoConnect: true,
         transports: ["websocket"]
       });
       socketRef.current = activeSocket;
-      activeSocket.emit("join-board", { boardId });
+
+      // Initial join and state request
+      const join = () => {
+        const storedName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
+        activeSocket?.emit("join-board", { boardId, userName: storedName || undefined });
+        activeSocket?.emit("request-state", { boardId });
+      };
+
+      activeSocket.on("connect", join);
+      if (activeSocket.connected) {
+        join();
+      }
+
+      // Reconnect / state sync (A2.4)
+      const handleBoardState = ({
+        elements,
+        version
+      }: {
+        boardId: string;
+        elements: WhiteboardElement[];
+        version: number;
+      }) => {
+        const localVersion = useBoardStore.getState().version;
+        if (version >= localVersion) {
+          syncElements(elements, version);
+        }
+      };
 
       const handleDraw = ({ element }: DrawEventPayload) => {
         upsertRemoteElement(element);
@@ -52,6 +94,23 @@ export function useSocket(boardId: string) {
         upsertRemoteCursor(cursor);
       };
 
+      const handleCursorLeave = ({ userId }: { userId: string }) => {
+        removeRemoteCursor(userId);
+      };
+
+      const handlePresenceState = ({ users }: { users: PresenceUser[] }) => {
+        setPresenceUsers(users);
+      };
+
+      const handlePresenceJoin = ({ user }: { user: PresenceUser }) => {
+        addPresenceUser(user);
+      };
+
+      const handlePresenceLeave = ({ userId }: { userId: string }) => {
+        removePresenceUser(userId);
+        removeRemoteCursor(userId);
+      };
+
       const handleClear = () => {
         syncElements([]);
       };
@@ -60,19 +119,36 @@ export function useSocket(boardId: string) {
         syncElements(elements);
       };
 
+      const handleLaser = ({ point, color }: { point: { x: number; y: number }; color: string }) => {
+        useBoardStore.getState().addLaserPoint(point, color);
+      };
+
+      activeSocket.on("board:state", handleBoardState);
       activeSocket.on("draw", handleDraw);
       activeSocket.on("update-element", handleUpdateElement);
       activeSocket.on("cursor-position", handleCursor);
+      activeSocket.on("cursor-leave", handleCursorLeave);
+      activeSocket.on("presence:state", handlePresenceState);
+      activeSocket.on("presence:join", handlePresenceJoin);
+      activeSocket.on("presence:leave", handlePresenceLeave);
       activeSocket.on("clear-board", handleClear);
       activeSocket.on("replace-elements", handleReplace);
+      activeSocket.on("laser-point", handleLaser);
 
       return () => {
         activeSocket?.emit("leave-board", { boardId });
+        activeSocket?.off("connect", join);
+        activeSocket?.off("board:state", handleBoardState);
         activeSocket?.off("draw", handleDraw);
         activeSocket?.off("update-element", handleUpdateElement);
         activeSocket?.off("cursor-position", handleCursor);
+        activeSocket?.off("cursor-leave", handleCursorLeave);
+        activeSocket?.off("presence:state", handlePresenceState);
+        activeSocket?.off("presence:join", handlePresenceJoin);
+        activeSocket?.off("presence:leave", handlePresenceLeave);
         activeSocket?.off("clear-board", handleClear);
         activeSocket?.off("replace-elements", handleReplace);
+        activeSocket?.off("laser-point", handleLaser);
         activeSocket?.disconnect();
         if (socketRef.current === activeSocket) {
           socketRef.current = null;
@@ -85,11 +161,33 @@ export function useSocket(boardId: string) {
       cleanupSocket = cleanup;
     });
 
+    // Cleanup stale remote cursors periodically (A3.2)
+    const cleanupInterval = window.setInterval(() => {
+      cleanStaleCursors();
+    }, 4000);
+
     return () => {
       isMounted = false;
       cleanupSocket?.();
+      window.clearInterval(cleanupInterval);
+      if (trailingTimerRef.current !== null) {
+        window.clearTimeout(trailingTimerRef.current);
+      }
+      if (cursorFrameRef.current !== null) {
+        window.cancelAnimationFrame(cursorFrameRef.current);
+      }
     };
-  }, [boardId, syncElements, upsertRemoteCursor, upsertRemoteElement]);
+  }, [
+    boardId,
+    addPresenceUser,
+    cleanStaleCursors,
+    removePresenceUser,
+    removeRemoteCursor,
+    setPresenceUsers,
+    syncElements,
+    upsertRemoteCursor,
+    upsertRemoteElement
+  ]);
 
   return useMemo(
     () => ({
@@ -99,23 +197,44 @@ export function useSocket(boardId: string) {
       emitElementUpdate(element: WhiteboardElement) {
         socketRef.current?.emit("update-element", { boardId, element });
       },
+      // A6.3: Cursor throttle with trailing send guarantee
       emitCursor(cursor: Omit<CursorPosition, "userId">) {
         queuedCursorRef.current = cursor;
+
+        const scheduleTrailingSend = (delayMs: number) => {
+          if (trailingTimerRef.current !== null) return;
+          trailingTimerRef.current = window.setTimeout(() => {
+            trailingTimerRef.current = null;
+            if (queuedCursorRef.current && socketRef.current) {
+              socketRef.current.emit("cursor-position", {
+                boardId,
+                cursor: queuedCursorRef.current
+              });
+              lastCursorSentRef.current = Date.now();
+            }
+          }, Math.max(0, delayMs));
+        };
 
         if (cursorFrameRef.current !== null) {
           return;
         }
 
         cursorFrameRef.current = window.requestAnimationFrame(() => {
-          const now = Date.now();
-          if (now - lastCursorSentRef.current >= THROTTLE_MS && queuedCursorRef.current) {
-            socketRef.current?.emit("cursor-position", {
-              boardId,
-              cursor: queuedCursorRef.current
-            });
-            lastCursorSentRef.current = now;
-          }
           cursorFrameRef.current = null;
+          const now = Date.now();
+          const elapsed = now - lastCursorSentRef.current;
+
+          if (elapsed >= THROTTLE_MS) {
+            if (queuedCursorRef.current && socketRef.current) {
+              socketRef.current.emit("cursor-position", {
+                boardId,
+                cursor: queuedCursorRef.current
+              });
+              lastCursorSentRef.current = now;
+            }
+          } else {
+            scheduleTrailingSend(THROTTLE_MS - elapsed);
+          }
         });
       },
       emitClear() {
@@ -123,6 +242,12 @@ export function useSocket(boardId: string) {
       },
       emitReplace(elements: WhiteboardElement[]) {
         socketRef.current?.emit("replace-elements", { boardId, elements });
+      },
+      emitLaser(point: { x: number; y: number }, color?: string) {
+        socketRef.current?.emit("laser-point", { boardId, point, color });
+      },
+      emitUpdateUserName(name: string) {
+        socketRef.current?.emit("update-user-name", { name });
       }
     }),
     [boardId]

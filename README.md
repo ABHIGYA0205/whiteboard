@@ -1,179 +1,136 @@
 # Whiteboard
 
-A collaborative whiteboard built with Next.js 14, TypeScript, Express, Socket.io, Zustand, and MongoDB.
+A high-performance, real-time collaborative whiteboard built with Next.js 14, TypeScript, Node.js Express, Socket.io, Zustand, and MongoDB. Features an infinite canvas, multi-user live cursors, presence awareness with follow-mode, heuristic auto-clean shape detection, and AI sketch enhancement.
+
+---
+
+## Architecture Overview
+
+```mermaid
+graph TD
+    Client[Next.js 14 Client Canvas & Toolbar] <-->|Websocket Socket.io| Server[Express & Socket.io Server]
+    Client -->|REST API /board, /ai, /uploads| Server
+    Server -->|Persist Elements & Versioning| Mongo[(MongoDB)]
+    Server -->|Static Uploads /uploads| FS[(Disk Storage)]
+    Server -->|AI Image Gen| HF[HuggingFace / AI Horde]
+```
+
+---
 
 ## Features
 
-- Infinite HTML5 canvas with pan and zoom
-- Drawing tools: pencil, rectangle, circle, and line
-- Unified element-based data model
-- Selection, dragging, and resizing
-- Undo and redo
-- Real-time collaboration with live cursors
-- Board persistence with MongoDB
-- Auto-save on the frontend
-- Heuristic "Auto-clean" shape detection for rough strokes
+- **Infinite Canvas**: Zero-latency HTML5 canvas with smooth pan, zoom, pinch-to-zoom, and two-finger mobile touch gestures.
+- **Complete Tool Suite**: Pencil, rectangle, circle, line, arrow, multi-line text with dynamic font scaling, image upload, and eraser.
+- **Real-Time Collaboration**: Live cursors with server-assigned identities, presence avatars, and **Follow User** mode.
+- **Collaborative Undo & Redo**: Broadcasted state transitions keeping all tabs and users in sync.
+- **Optimistic Concurrency & Versioning**: Version-controlled saves preventing last-write-wins data loss with 409 conflict detection.
+- **Element-Level Operations**: Op-based sync (`POST /board/:id/ops`) avoiding costly whole-document rewrites.
+- **Data Integrity**: Strict Mongoose validation, schema support for text, images, custom fills, and font sizes.
+- **Smart Image Storage**: Automatic extraction of base64 payloads to static URLs (`/uploads/`), saving database size and bandwidth.
+- **AI Sketch Enhancement**: Asynchronous job queue, in-memory caching, rate limiting, and prompt enrichment.
+- **Theme Awareness**: Dynamic light/dark theme system with synchronized canvas background and PNG export.
+
+---
 
 ## Project Structure
 
 ```text
 .
-├── client/          # Next.js 14 frontend
-├── server/          # Express + Socket.io backend
-├── shared/          # Shared TypeScript types
-├── package.json     # Workspace root
+├── client/              # Next.js 14 frontend (Canvas, Toolbar, Hooks, Store)
+├── server/              # Express + Socket.io backend (Controllers, Sockets, Models)
+├── shared/              # Shared TypeScript types package (@shared)
+├── scripts/             # Cross-platform development orchestration
+├── .github/workflows/   # Automated CI pipeline
+├── docker-compose.yml   # Multi-container orchestration (Mongo, Server, Client)
+├── IMPROVEMENTS.md      # Action plan and engineering tracking
 └── README.md
 ```
 
-## Requirements
+---
 
-- Node.js 18+ recommended
-- npm 9+ recommended
-- MongoDB running locally or a MongoDB connection string
+## Collaboration Socket Events
 
-## Environment Variables
+| Event | Direction | Payload | Description |
+|---|---|---|---|
+| `identity` | Server → Client | `{ userId, name, color }` | Server assigns distinct identity & color palette |
+| `join-board` | Client → Server | `{ boardId }` | User joins board room |
+| `leave-board` | Client → Server | `{ boardId }` | User leaves board room |
+| `request-state` | Client → Server | `{ boardId }` | Request fresh board state on reconnect |
+| `board:state` | Server → Client | `{ elements, version }` | Authoritative board snapshot |
+| `presence:join` | Server → Client | `{ boardId, user }` | Notifies room of collaborator arrival |
+| `presence:leave`| Server → Client | `{ boardId, userId }` | Notifies room of collaborator departure |
+| `presence:state`| Server → Client | `{ boardId, users }` | Current room presence list |
+| `cursor-position`| Bidirectional | `{ boardId, cursor }` | Throttled cursor position with trailing send |
+| `cursor-leave` | Server → Client | `{ boardId, userId }` | Removes remote cursor immediately |
+| `draw` | Bidirectional | `{ boardId, element }` | Real-time stroke / element broadcast |
+| `update-element`| Bidirectional | `{ boardId, element }` | Element transformation / resize |
+| `replace-elements`| Bidirectional | `{ boardId, elements }` | Undo/Redo or batch replace synchronization |
+| `clear-board` | Bidirectional | `{ boardId }` | Clear board notification |
 
-Create a `.env` file inside `server/`:
+---
 
+## REST API Reference
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `POST /board` | POST | Creates a new board document |
+| `GET /board/:id` | GET | Fetches or lazily initializes a board |
+| `PUT /board/:id` | PUT | Updates board with version checking (returns 409 on conflict) |
+| `POST /board/:id/ops` | POST | Applies element-level operations (`add`, `update`, `delete`) |
+| `POST /board/upload` | POST | Persists image and returns static `/uploads/...` URL |
+| `POST /board/clean` | POST | Heuristic shape recognition (turns rough sketches into geometry) |
+| `POST /ai/enhance` | POST | Queues AI sketch enhancement (returns cached URL or `jobId`) |
+| `GET /ai/job/:id` | GET | Polls status & progress for queued AI generation |
+| `GET /health` | GET | Liveness probe |
+| `GET /health/ready` | GET | Readiness probe (verifies MongoDB ping) |
+
+---
+
+## Quickstart & Local Development
+
+### 1. Requirements
+
+- Node.js 18+
+- npm 9+
+- MongoDB running locally or via Docker
+
+### 2. Environment Setup
+
+Create `server/.env`:
 ```env
 PORT=4001
 MONGO_URI=mongodb://127.0.0.1:27017/whiteboard
 CLIENT_ORIGIN=http://localhost:3000,http://localhost:3001
+HF_TOKEN=your_token_optional
 ```
 
-`CLIENT_ORIGIN` supports a comma-separated list, which is handy if Next.js starts on a different local port.
-
-You can optionally create a `.env.local` inside `client/`:
-
+Create `client/.env.local`:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4001
 NEXT_PUBLIC_SOCKET_URL=http://localhost:4001
 ```
 
-The client already defaults to `http://localhost:4001`, so the frontend env file is optional for local development.
-
-## Install Dependencies
-
-From the project root:
+### 3. Run with Docker Compose
 
 ```bash
+docker compose up -d
+```
+
+### 4. Run Directly with Node / npm
+
+```bash
+# Install dependencies
 npm install
-```
 
-## Run the Project
-
-### Option 1: Run client and server together
-
-From the project root:
-
-```bash
+# Run cross-platform concurrent dev server
 npm run dev
-```
 
-This starts:
+# Run typechecks
+npm run typecheck
 
-- Next.js client on `http://localhost:3000`
-- Express + Socket.io server on `http://localhost:4001`
+# Run test suite
+npm run test
 
-If port `3000` is busy, Next.js may start on `http://localhost:3001`. The default server config now allows both `3000` and `3001`.
-
-### Option 2: Run each app separately
-
-Client:
-
-```bash
-npm run dev:client
-```
-
-The client dev script clears `client/.next` before starting, which helps avoid stale Next.js dev-cache errors around missing `vendor-chunks` files.
-
-Server:
-
-```bash
-npm run dev:server
-```
-
-If you want file watching specifically for the backend, use:
-
-```bash
-npm run dev:watch --workspace server
-```
-
-## Build for Production
-
-From the project root:
-
-```bash
+# Build production bundle
 npm run build
 ```
-
-You can also build each workspace separately:
-
-```bash
-npm run build --workspace client
-npm run build --workspace server
-```
-
-## How to Use
-
-1. Start MongoDB.
-2. Start the server and client.
-3. Open `http://localhost:3000`.
-4. Click `Create new board`.
-5. Draw on the canvas with the toolbar tools.
-6. Open the same board URL in another tab or browser to test collaboration.
-
-## Collaboration Events
-
-The frontend and backend sync these live events:
-
-- `draw`
-- `update-element`
-- `cursor-position`
-- `clear-board`
-- `replace-elements`
-
-Each board uses a Socket.io room keyed by `boardId`.
-
-## API Endpoints
-
-### `POST /board`
-
-Creates a new board.
-
-### `GET /board/:id`
-
-Loads an existing board. If the board does not exist yet, the server creates it.
-
-### `PUT /board/:id`
-
-Updates the board's `elements` array.
-
-### `POST /board/clean`
-
-Accepts raw element data and returns cleaned geometric shapes when the heuristic matcher recognizes them.
-
-## Notes
-
-- Pan the canvas with `Shift + drag`, middle mouse button, or right mouse button.
-- Zoom with the mouse wheel.
-- The current auto-clean implementation is heuristic-based and designed so an LLM-assisted cleanup service can be added later.
-- Boards are auto-saved every few seconds from the frontend.
-
-## Troubleshooting
-
-### MongoDB connection error
-
-Make sure MongoDB is running and that `MONGO_URI` in `server/.env` is correct.
-
-### Frontend cannot reach backend
-
-Check that:
-
-- the server is running on port `4001`
-- `CLIENT_ORIGIN` matches the frontend URL
-- `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SOCKET_URL` point to the backend
-
-### Port already in use
-
-Change `PORT` in `server/.env` and update the frontend env values if needed.

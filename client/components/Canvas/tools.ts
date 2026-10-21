@@ -14,5 +14,8 @@ export const TOOL_OPTIONS: Array<{
   { id: "line", label: "Line", shortcut: "L", icon: "➖" },
   { id: "arrow", label: "Arrow", shortcut: "A", icon: "↗️" },
   { id: "text", label: "Text", shortcut: "T", icon: "T" },
-  { id: "eraser", label: "Erase", shortcut: "E", icon: "⌫" }
+  { id: "sticky", label: "Sticky Note", shortcut: "N", icon: "📝" },
+  { id: "image", label: "Image", shortcut: "I", icon: "🖼️" },
+  { id: "eraser", label: "Erase", shortcut: "E", icon: "⌫" },
+  { id: "laser", label: "Laser Pointer", shortcut: "K", icon: "✨" }
 ];
