@@ -31,10 +31,9 @@ aiRouter.post("/enhance", async (req, res) => {
 
     console.log("Sending request to Hugging Face...");
 
-    // Use direct fetch to HF's free serverless Inference API
-    // This bypasses the paid Inference Providers / credits system
+    // Use HF's inference router with the free hf-inference provider
     const response = await fetch(
-      "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
+      "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0",
       {
         method: "POST",
         headers: {
