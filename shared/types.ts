@@ -4,6 +4,7 @@ export type ToolType =
   | "eraser"
   | "pencil"
   | "rectangle"
+  | "diamond"
   | "circle"
   | "line"
   | "arrow"
@@ -28,12 +29,18 @@ export type WhiteboardElement = {
   height: number;
   strokeColor: string;
   strokeWidth: number;
+  strokeStyle?: "solid" | "dashed" | "dotted";
   fillColor?: string;
+  fillStyle?: "transparent" | "semi" | "solid";
+  roughness?: number; // 0 = architect/clean, 1 = artist, 2 = cartoonist
+  roundness?: boolean;
   text?: string;
   fontSize?: number;
   imageUrl?: string;
   opacity?: number;
   isLocked?: boolean;
+  startBinding?: { elementId: string };
+  endBinding?: { elementId: string };
   points: Point[];
 };
 

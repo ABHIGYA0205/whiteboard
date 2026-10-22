@@ -49,17 +49,30 @@ export function ActiveUsersModal({
     };
   }, [isOpen, onClose]);
 
+  const currentUserId = useBoardStore((state) => state.currentUserId);
+
   if (!isOpen) return null;
 
-  // Ensure current user is in the displayed list even if presence state is reconciling
-  const displayUsers = [...presenceUsers];
-  const hasCurrentUser = displayUsers.some(
-    (u) => u.name && currentUserName && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase()
+  // Build accurate display list, mapping the current user cleanly
+  let displayUsers = presenceUsers.map((u) => {
+    const isSelf =
+      (Boolean(currentUserId) && u.userId === currentUserId) ||
+      (Boolean(currentUserName) && Boolean(u.name) && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase());
+    if (isSelf && currentUserName) {
+      return { ...u, name: currentUserName };
+    }
+    return u;
+  });
+
+  const hasSelf = displayUsers.some(
+    (u) =>
+      (Boolean(currentUserId) && u.userId === currentUserId) ||
+      (Boolean(currentUserName) && Boolean(u.name) && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase())
   );
 
-  if (!hasCurrentUser && currentUserName) {
+  if (!hasSelf && currentUserName) {
     displayUsers.unshift({
-      userId: "local-user",
+      userId: currentUserId || "local-user",
       name: currentUserName,
       color: "#6366f1"
     });
@@ -93,15 +106,15 @@ export function ActiveUsersModal({
         ref={modalRef}
         style={{
           position: "relative",
-          background: isLight ? "#ffffff" : "linear-gradient(160deg, #181926 0%, #0f1019 100%)",
-          border: isLight ? "1px solid rgba(0, 0, 0, 0.12)" : "1px solid rgba(255, 255, 255, 0.14)",
-          borderRadius: "20px",
+          background: isLight ? "#ffffff" : "#18181b",
+          border: isLight ? "1px solid rgba(0, 0, 0, 0.12)" : "1px solid rgba(255, 255, 255, 0.12)",
+          borderRadius: "16px",
           width: "100%",
           maxWidth: "360px",
           padding: "20px",
           boxShadow: isLight
             ? "0 20px 50px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04)"
-            : "0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(99, 102, 241, 0.2)",
+            : "0 25px 60px rgba(0, 0, 0, 0.8)",
           color: isLight ? "#0f172a" : "#f8fafc",
           display: "flex",
           flexDirection: "column",
@@ -126,20 +139,6 @@ export function ActiveUsersModal({
           }
         `}</style>
 
-        {/* Ambient top glow */}
-        <div
-          style={{
-            position: "absolute",
-            top: "-40px",
-            right: "-20px",
-            width: "160px",
-            height: "100px",
-            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(217, 70, 239, 0.35))",
-            filter: "blur(40px)",
-            pointerEvents: "none"
-          }}
-        />
-
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -148,12 +147,11 @@ export function ActiveUsersModal({
                 width: "36px",
                 height: "36px",
                 borderRadius: "10px",
-                background: "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)",
+                background: "#6366f1",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#ffffff",
-                boxShadow: "0 4px 12px rgba(99, 102, 241, 0.35)"
+                color: "#ffffff"
               }}
             >
               <Users size={18} />
@@ -236,9 +234,10 @@ export function ActiveUsersModal({
         >
           {displayUsers.map((user) => {
             const isSelf =
-              currentUserName &&
-              user.name &&
-              user.name.trim().toLowerCase() === currentUserName.trim().toLowerCase();
+              (Boolean(currentUserId) && user.userId === currentUserId) ||
+              (Boolean(currentUserName) &&
+                Boolean(user.name) &&
+                user.name.trim().toLowerCase() === currentUserName.trim().toLowerCase());
 
             return (
               <div

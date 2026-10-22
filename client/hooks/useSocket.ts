@@ -25,6 +25,18 @@ const getSocketUrl = () => {
   return "http://localhost:4001";
 };
 
+const getLocalUserId = () => {
+  if (typeof window === "undefined") return "temp_user";
+  let id = localStorage.getItem("whiteboard_user_id");
+  if (!id) {
+    id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : "u_" + Math.random().toString(36).substring(2, 11);
+    localStorage.setItem("whiteboard_user_id", id);
+  }
+  return id;
+};
+
 export function useSocket(boardId: string) {
   const upsertRemoteElement = useBoardStore((state) => state.upsertRemoteElement);
   const upsertRemoteCursor = useBoardStore((state) => state.upsertRemoteCursor);
@@ -34,6 +46,7 @@ export function useSocket(boardId: string) {
   const addPresenceUser = useBoardStore((state) => state.addPresenceUser);
   const removePresenceUser = useBoardStore((state) => state.removePresenceUser);
   const syncElements = useBoardStore((state) => state.syncElements);
+  const setCurrentUserId = useBoardStore((state) => state.setCurrentUserId);
 
   const socketRef = useRef<Socket | null>(null);
   const cursorFrameRef = useRef<number | null>(null);
@@ -49,16 +62,23 @@ export function useSocket(boardId: string) {
       const { io } = await import("socket.io-client");
       if (!isMounted) return;
 
+      const localId = getLocalUserId();
+      const storedName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
+
       activeSocket = io(getSocketUrl(), {
         autoConnect: true,
-        transports: ["websocket"]
+        transports: ["websocket"],
+        auth: {
+          userId: localId,
+          name: storedName || undefined
+        }
       });
       socketRef.current = activeSocket;
 
       // Initial join and state request
       const join = () => {
-        const storedName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
-        activeSocket?.emit("join-board", { boardId, userName: storedName || undefined });
+        const currentName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
+        activeSocket?.emit("join-board", { boardId, userName: currentName || undefined });
         activeSocket?.emit("request-state", { boardId });
       };
 
@@ -66,6 +86,13 @@ export function useSocket(boardId: string) {
       if (activeSocket.connected) {
         join();
       }
+
+      const handleIdentity = (identity: PresenceUser) => {
+        if (identity?.userId) {
+          setCurrentUserId(identity.userId);
+        }
+      };
+      activeSocket.on("identity", handleIdentity);
 
       // Reconnect / state sync (A2.4)
       const handleBoardState = ({
@@ -115,8 +142,16 @@ export function useSocket(boardId: string) {
         syncElements([]);
       };
 
-      const handleReplace = ({ elements }: { elements: WhiteboardElement[] }) => {
-        syncElements(elements);
+      const handleReplace = ({ elements, version }: { elements: WhiteboardElement[]; version?: number }) => {
+        const localVersion = useBoardStore.getState().version;
+        if (version === undefined || version >= localVersion) {
+          syncElements(elements, version ?? (localVersion + 1));
+        }
+      };
+
+      const handleBoardDeleted = () => {
+        alert("This board has been deleted.");
+        window.location.href = "/";
       };
 
       const handleLaser = ({ point, color }: { point: { x: number; y: number }; color: string }) => {
@@ -133,10 +168,12 @@ export function useSocket(boardId: string) {
       activeSocket.on("presence:leave", handlePresenceLeave);
       activeSocket.on("clear-board", handleClear);
       activeSocket.on("replace-elements", handleReplace);
+      activeSocket.on("board-deleted", handleBoardDeleted);
       activeSocket.on("laser-point", handleLaser);
 
       return () => {
         activeSocket?.emit("leave-board", { boardId });
+        activeSocket?.off("identity", handleIdentity);
         activeSocket?.off("connect", join);
         activeSocket?.off("board:state", handleBoardState);
         activeSocket?.off("draw", handleDraw);
@@ -148,6 +185,7 @@ export function useSocket(boardId: string) {
         activeSocket?.off("presence:leave", handlePresenceLeave);
         activeSocket?.off("clear-board", handleClear);
         activeSocket?.off("replace-elements", handleReplace);
+        activeSocket?.off("board-deleted", handleBoardDeleted);
         activeSocket?.off("laser-point", handleLaser);
         activeSocket?.disconnect();
         if (socketRef.current === activeSocket) {
@@ -184,6 +222,7 @@ export function useSocket(boardId: string) {
     removePresenceUser,
     removeRemoteCursor,
     setPresenceUsers,
+    setCurrentUserId,
     syncElements,
     upsertRemoteCursor,
     upsertRemoteElement
@@ -240,14 +279,21 @@ export function useSocket(boardId: string) {
       emitClear() {
         socketRef.current?.emit("clear-board", { boardId });
       },
+      emitDeleteBoard() {
+        socketRef.current?.emit("delete-board", { boardId });
+      },
       emitReplace(elements: WhiteboardElement[]) {
-        socketRef.current?.emit("replace-elements", { boardId, elements });
+        const version = useBoardStore.getState().version;
+        socketRef.current?.emit("replace-elements", { boardId, elements, version });
       },
       emitLaser(point: { x: number; y: number }, color?: string) {
         socketRef.current?.emit("laser-point", { boardId, point, color });
       },
       emitUpdateUserName(name: string) {
-        socketRef.current?.emit("update-user-name", { name });
+        if (typeof window !== "undefined") {
+          localStorage.setItem("whiteboard_user_name", name);
+        }
+        socketRef.current?.emit("update-user-name", { boardId, name });
       }
     }),
     [boardId]

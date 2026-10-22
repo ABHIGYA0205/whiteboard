@@ -13,7 +13,7 @@ const elementSchema = new Schema(
     id: { type: String, required: true },
     type: {
       type: String,
-      enum: ["pencil", "rectangle", "circle", "line", "arrow", "text", "image", "sticky"],
+      enum: ["pencil", "rectangle", "diamond", "circle", "line", "arrow", "text", "image", "sticky"],
       required: true
     },
     x: { type: Number, required: true },
@@ -22,15 +22,21 @@ const elementSchema = new Schema(
     height: { type: Number, required: true },
     strokeColor: { type: String, required: true },
     strokeWidth: { type: Number, required: true },
+    strokeStyle: { type: String, enum: ["solid", "dashed", "dotted"], default: "solid" },
     fillColor: { type: String, default: "transparent" },
-    text: { type: String },
-    fontSize: { type: Number },
-    imageUrl: { type: String },
+    fillStyle: { type: String, enum: ["transparent", "semi", "solid"], default: "transparent" },
+    roughness: { type: Number, default: 0 },
+    roundness: { type: Boolean, default: false },
+    text: { type: String, default: "" },
+    fontSize: { type: Number, default: 24 },
+    imageUrl: { type: String, default: "" },
     opacity: { type: Number, default: 1 },
     isLocked: { type: Boolean, default: false },
+    startBinding: { type: Schema.Types.Mixed },
+    endBinding: { type: Schema.Types.Mixed },
     points: { type: [pointSchema], default: [] }
   },
-  { _id: false, strict: "throw" }
+  { _id: false, strict: false }
 );
 
 const boardSchema = new Schema(

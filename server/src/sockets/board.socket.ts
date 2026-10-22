@@ -1,6 +1,6 @@
 import type { Server, Socket } from "socket.io";
-import { getBoard } from "../services/board.service";
-import type { PresenceUser } from "@shared/types";
+import { getBoard, updateBoard, deleteBoard } from "../services/board.service";
+import type { PresenceUser, WhiteboardElement } from "@shared/types";
 
 const PALETTE = [
   "#f43f5e", // Rose
@@ -56,36 +56,50 @@ export function registerBoardSocket(io: Server, socket: Socket) {
 
   let currentBoardId: string | null = null;
 
-  socket.on("join-board", async ({ boardId, userName: customName }: { boardId: string; userName?: string }) => {
-    if (!boardId || typeof boardId !== "string") return;
+  socket.on(
+    "join-board",
+    async ({
+      boardId,
+      userName: customName,
+      role
+    }: {
+      boardId: string;
+      userName?: string;
+      role?: string;
+    }) => {
+      if (!boardId || typeof boardId !== "string") return;
 
-    if (customName && typeof customName === "string" && customName.trim()) {
-      identity.name = customName.trim();
-    }
+      if (role === "viewer" || socket.handshake.auth.role === "viewer") {
+        socket.data.isViewer = true;
+      }
 
-    if (currentBoardId && currentBoardId !== boardId) {
-      leaveBoard(currentBoardId);
-    }
+      if (customName && typeof customName === "string" && customName.trim()) {
+        identity.name = customName.trim();
+      }
 
-    currentBoardId = boardId;
-    socket.join(boardId);
+      if (currentBoardId && currentBoardId !== boardId) {
+        leaveBoard(currentBoardId);
+      }
 
-    if (!roomUsers.has(boardId)) {
-      roomUsers.set(boardId, new Map());
-    }
+      currentBoardId = boardId;
+      socket.join(boardId);
+
+      if (!roomUsers.has(boardId)) {
+        roomUsers.set(boardId, new Map());
+      }
     const boardPresence = roomUsers.get(boardId)!;
     boardPresence.set(socket.id, identity);
 
-    // Notify room of new user
+    // Broadcast full authoritative room presence to all connected sockets in this board
+    io.to(boardId).emit("presence:state", {
+      boardId,
+      users: Array.from(boardPresence.values())
+    });
+
+    // Notify room of new user for listeners that handle individual delta events
     socket.to(boardId).emit("presence:join", {
       boardId,
       user: identity
-    });
-
-    // Send full current room presence list to the joining socket
-    socket.emit("presence:state", {
-      boardId,
-      users: Array.from(boardPresence.values())
     });
 
     // Provide latest authoritative board state on join/reconnect
@@ -125,6 +139,11 @@ export function registerBoardSocket(io: Server, socket: Socket) {
       boardPresence.delete(socket.id);
       if (boardPresence.size === 0) {
         roomUsers.delete(boardId);
+      } else {
+        io.to(boardId).emit("presence:state", {
+          boardId,
+          users: Array.from(boardPresence.values())
+        });
       }
     }
     socket.to(boardId).emit("presence:leave", { boardId, userId });
@@ -139,23 +158,26 @@ export function registerBoardSocket(io: Server, socket: Socket) {
   });
 
   socket.on("draw", ({ boardId, element }) => {
+    if (socket.data.isViewer) return;
     if (!boardId || !element) return;
     socket.to(boardId).emit("draw", { boardId, element });
   });
 
   socket.on("update-element", ({ boardId, element }) => {
+    if (socket.data.isViewer) return;
     if (!boardId || !element) return;
     socket.to(boardId).emit("update-element", { boardId, element });
   });
 
-  socket.on("update-user-name", ({ name }: { name: string }) => {
+  socket.on("update-user-name", ({ boardId, name }: { boardId?: string; name: string }) => {
+    const targetBoardId = boardId || currentBoardId;
     if (name && typeof name === "string" && name.trim()) {
       identity.name = name.trim();
-      if (currentBoardId && roomUsers.has(currentBoardId)) {
-        roomUsers.get(currentBoardId)!.set(socket.id, identity);
-        io.to(currentBoardId).emit("presence:state", {
-          boardId: currentBoardId,
-          users: Array.from(roomUsers.get(currentBoardId)!.values())
+      if (targetBoardId && roomUsers.has(targetBoardId)) {
+        roomUsers.get(targetBoardId)!.set(socket.id, identity);
+        io.to(targetBoardId).emit("presence:state", {
+          boardId: targetBoardId,
+          users: Array.from(roomUsers.get(targetBoardId)!.values())
         });
       }
     }
@@ -163,7 +185,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
 
   socket.on(
     "cursor-position",
-    ({ boardId, cursor }: { boardId: string; cursor: { x: number; y: number } }) => {
+    ({ boardId, cursor }: { boardId: string; cursor: { x: number; y: number; name?: string } }) => {
       if (!boardId || !cursor) return;
       socket.to(boardId).emit("cursor-position", {
         boardId,
@@ -172,23 +194,59 @@ export function registerBoardSocket(io: Server, socket: Socket) {
           y: cursor.y,
           userId,
           color: userColor,
-          name: identity.name,
+          name: cursor.name || identity.name,
           lastSeen: Date.now()
         }
       });
     }
   );
 
-  socket.on("clear-board", ({ boardId }: { boardId: string }) => {
+  socket.on("clear-board", async ({ boardId }: { boardId: string }) => {
+    if (socket.data.isViewer) return;
     if (!boardId) return;
     socket.to(boardId).emit("clear-board");
+    try {
+      const updated = await updateBoard(boardId, []);
+      io.to(boardId).emit("replace-elements", {
+        boardId,
+        elements: [],
+        version: updated.version
+      });
+    } catch {
+      // ignore
+    }
+  });
+
+  socket.on("delete-board", async ({ boardId }: { boardId: string }) => {
+    if (socket.data.isViewer) return;
+    if (!boardId) return;
+    socket.to(boardId).emit("board-deleted", { boardId });
+    try {
+      await deleteBoard(boardId);
+    } catch {
+      // ignore
+    }
   });
 
   socket.on(
     "replace-elements",
-    ({ boardId, elements }: { boardId: string; elements: unknown[] }) => {
+    async ({ boardId, elements, version }: { boardId: string; elements: unknown[]; version?: number }) => {
+      if (socket.data.isViewer) return;
       if (!boardId || !Array.isArray(elements)) return;
-      socket.to(boardId).emit("replace-elements", { boardId, elements });
+      try {
+        const updated = await updateBoard(boardId, elements as WhiteboardElement[]);
+        io.to(boardId).emit("replace-elements", {
+          boardId,
+          elements: updated.elements,
+          version: updated.version
+        });
+      } catch {
+        socket.to(boardId).emit("replace-elements", {
+          boardId,
+          elements,
+          version: (version ?? 0) + 1
+        });
+      }
     }
   );
 

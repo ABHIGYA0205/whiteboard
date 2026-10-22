@@ -13,7 +13,8 @@ import {
   resizeElement,
   resizeElementsGroup,
   translateElement,
-  updateElementDraft
+  updateElementDraft,
+  getNormalizedBounds
 } from "@/components/Canvas/drawingUtils";
 import { useBoardStore } from "@/store/boardStore";
 import type {
@@ -95,6 +96,11 @@ export function useCanvas({
   const strokeColor = useBoardStore((state) => state.strokeColor);
   const fillColor = useBoardStore((state) => state.fillColor);
   const strokeWidth = useBoardStore((state) => state.strokeWidth);
+  const strokeStyle = useBoardStore((state) => state.strokeStyle);
+  const fillStyle = useBoardStore((state) => state.fillStyle);
+  const roughness = useBoardStore((state) => state.roughness);
+  const roundness = useBoardStore((state) => state.roundness);
+  const opacity = useBoardStore((state) => state.opacity);
   const viewport = useBoardStore((state) => state.viewport);
   const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
@@ -360,6 +366,29 @@ export function useCanvas({
           return;
         }
 
+        // Alt+drag: Duplicate selection immediately on drag!
+        if (event.altKey) {
+          const targetIds = selectedElementIds.includes(activeElement.id) ? selectedElementIds : [activeElement.id];
+          const idSet = new Set(targetIds);
+          const toClone = currentElements.filter((el) => idSet.has(el.id));
+          const clones = toClone.map((el) => ({
+            ...el,
+            id: crypto.randomUUID(),
+            points: el.points.map((p) => ({ ...p }))
+          }));
+          const cloneIds = clones.map((c) => c.id);
+          const nextElements = [...currentElements, ...clones];
+          setElements(nextElements);
+          selectElement(cloneIds);
+          interactionRef.current = {
+            mode: "dragging",
+            elementIds: cloneIds,
+            origin: point,
+            previousElements: currentElements
+          };
+          return;
+        }
+
         // Click on element: if already in selection, keep multi-selection for group drag!
         if (selectedElementIds.includes(activeElement.id)) {
           interactionRef.current = {
@@ -405,9 +434,11 @@ export function useCanvas({
       return;
     }
 
+    const shapeOptions = { strokeStyle, fillStyle, roughness, roundness, opacity };
+
     if (tool === "text") {
       event.preventDefault(); // Prevent mousedown from firing and stealing focus back from the textarea
-      const element = createElement(tool, point, strokeColor, strokeWidth, fillColor);
+      const element = createElement(tool, point, strokeColor, strokeWidth, fillColor, shapeOptions);
       element.text = "";
       element.width = 100; // default initial width
       element.height = element.fontSize || 24;
@@ -429,7 +460,7 @@ export function useCanvas({
     }
 
     if (tool === "sticky") {
-      const element = createElement("sticky", point, strokeColor, 1, fillColor !== "transparent" ? fillColor : "#fef08a");
+      const element = createElement("sticky", point, strokeColor, 1, fillColor !== "transparent" ? fillColor : "#fef08a", shapeOptions);
       const newElements = [...currentElements, element];
       setElements(newElements);
       commitElements(newElements);
@@ -440,9 +471,23 @@ export function useCanvas({
       return;
     }
 
-    const element = createElement(tool, point, strokeColor, strokeWidth, fillColor);
+    const element = createElement(tool, point, strokeColor, strokeWidth, fillColor, shapeOptions);
+    if (tool === "arrow" || tool === "line") {
+      const nearShape = currentElements.slice().reverse().find((el) => {
+        if (el.type === "line" || el.type === "arrow" || el.type === "pencil") return false;
+        const b = getNormalizedBounds(el);
+        return (
+          point.x >= b.x - 20 &&
+          point.x <= b.x + b.width + 20 &&
+          point.y >= b.y - 20 &&
+          point.y <= b.y + b.height + 20
+        );
+      });
+      if (nearShape) {
+        element.startBinding = { elementId: nearShape.id };
+      }
+    }
     setElements([...currentElements, element]);
-    selectElement(element.id);
     interactionRef.current = {
       mode: "drawing",
       elementId: element.id,
@@ -454,10 +499,13 @@ export function useCanvas({
     const point = getCanvasPoint(event);
     const currentElements = elementsRef.current;
     const currentViewport = viewportRef.current;
+    const currentUserName =
+      typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
     collaboration.emitCursor({
       x: point.x,
       y: point.y,
-      color: strokeColor
+      color: strokeColor,
+      name: currentUserName || undefined
     });
 
     if (tool === "laser" && event.buttons > 0) {
@@ -528,18 +576,47 @@ export function useCanvas({
       const deltaX = point.x - interaction.origin.x;
       const deltaY = point.y - interaction.origin.y;
       const idSet = new Set(interaction.elementIds);
-      const nextElements = currentElements.map((element) =>
-        idSet.has(element.id)
-          ? translateElement(element, deltaX, deltaY)
-          : element
-      );
+      const nextElements = currentElements.map((element) => {
+        if (idSet.has(element.id)) {
+          return translateElement(element, deltaX, deltaY);
+        }
+        // F1.5: Arrow binding: If this arrow is bound to a dragged shape, update its connected endpoint!
+        if (element.type === "arrow" || element.type === "line") {
+          const startMoved = element.startBinding && idSet.has(element.startBinding.elementId);
+          const endMoved = element.endBinding && idSet.has(element.endBinding.elementId);
+          if (startMoved && endMoved) {
+            return translateElement(element, deltaX, deltaY);
+          }
+          if (startMoved) {
+            return {
+              ...element,
+              x: element.x + deltaX,
+              y: element.y + deltaY,
+              width: element.width - deltaX,
+              height: element.height - deltaY
+            };
+          }
+          if (endMoved) {
+            return {
+              ...element,
+              width: element.width + deltaX,
+              height: element.height + deltaY
+            };
+          }
+        }
+        return element;
+      });
       setElements(nextElements);
       interactionRef.current = {
         ...interaction,
         origin: point
       };
-      const updatedElements = nextElements.filter((candidate) =>
-        idSet.has(candidate.id)
+      const updatedElements = nextElements.filter(
+        (candidate) =>
+          idSet.has(candidate.id) ||
+          (candidate.type === "arrow" &&
+            ((candidate.startBinding && idSet.has(candidate.startBinding.elementId)) ||
+              (candidate.endBinding && idSet.has(candidate.endBinding.elementId))))
       );
       updatedElements.forEach((el) => collaboration.emitElementUpdate(el));
       return;
@@ -597,9 +674,30 @@ export function useCanvas({
     }
 
     if (interactionRef.current.mode === "drawing") {
-      const drawnEl = useBoardStore.getState().elements.find(
+      const current = useBoardStore.getState().elements;
+      const drawnEl = current.find(
         (el) => el.id === (interactionRef.current as any).elementId
       );
+      if (drawnEl && (drawnEl.type === "arrow" || drawnEl.type === "line")) {
+        const endPoint = { x: drawnEl.x + drawnEl.width, y: drawnEl.y + drawnEl.height };
+        const nearShape = current.slice().reverse().find((el) => {
+          if (el.id === drawnEl.id || el.type === "line" || el.type === "arrow" || el.type === "pencil") return false;
+          const b = getNormalizedBounds(el);
+          return (
+            endPoint.x >= b.x - 20 &&
+            endPoint.x <= b.x + b.width + 20 &&
+            endPoint.y >= b.y - 20 &&
+            endPoint.y <= b.y + b.height + 20
+          );
+        });
+        if (nearShape) {
+          drawnEl.endBinding = { elementId: nearShape.id };
+          const updated = current.map((e) =>
+            e.id === drawnEl.id ? { ...drawnEl, endBinding: { elementId: nearShape.id } } : e
+          );
+          useBoardStore.getState().setElements(updated);
+        }
+      }
       if (drawnEl) {
         collaboration.emitDraw(drawnEl);
       }
@@ -607,6 +705,7 @@ export function useCanvas({
         useBoardStore.getState().elements,
         interactionRef.current.previousElements
       );
+      selectElement(null);
     }
 
     if (
@@ -628,10 +727,14 @@ export function useCanvas({
     }
 
     if (interactionRef.current.mode === "erasing") {
+      const nextElements = useBoardStore.getState().elements;
       commitElements(
-        useBoardStore.getState().elements,
+        nextElements,
         interactionRef.current.previousElements
       );
+      if (collaboration.emitReplace) {
+        collaboration.emitReplace(nextElements);
+      }
     }
 
     interactionRef.current = { mode: "idle" };

@@ -13,18 +13,26 @@ import {
   Moon,
   Globe,
   FileCode,
-  Keyboard
+  Keyboard,
+  CheckCircle2,
+  CloudOff,
+  Loader2,
+  Clock,
+  Trash2
 } from "lucide-react";
 import { useBoardStore } from "@/store/boardStore";
-import { exportToSvg } from "@/components/Canvas/drawingUtils";
+import { exportToSvg, exportSelectionToImage } from "@/components/Canvas/drawingUtils";
 
 type SidebarProps = {
   boardId: string;
+  saveStatus?: "saved" | "saving" | "conflict" | "error";
+  isViewer?: boolean;
   onClear: () => void;
+  onDeleteBoard?: () => void;
   onShowShortcuts?: () => void;
 };
 
-export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
+export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard, onShowShortcuts }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const theme = useBoardStore((state) => state.theme);
   const setTheme = useBoardStore((state) => state.setTheme);
@@ -33,6 +41,18 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const elements = useBoardStore((state) => state.elements);
   const loadBoard = useBoardStore((state) => state.loadBoard);
+  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; visitedAt: number }>>([]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && isOpen) {
+      try {
+        const stored = localStorage.getItem("whiteboard_recent_boards");
+        if (stored) {
+          setRecentBoards(JSON.parse(stored));
+        }
+      } catch {}
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -101,27 +121,33 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
     setIsOpen(false);
   };
 
-  // A6.1: Theme-aware export where canvas background matches theme precisely
+  // P2-1: Export content bounds without UI chrome
   const handleExport = () => {
+    setIsOpen(false);
+    const bg = theme === "dark" ? "#010409" : "#f8fafc";
+    const dataUrl = exportSelectionToImage(elements, bg);
+    if (dataUrl) {
+      const link = document.createElement("a");
+      link.download = `whiteboard-${boardId.slice(0, 8)}.png`;
+      link.href = dataUrl;
+      link.click();
+      return;
+    }
+
+    // Fallback if empty canvas
     const canvas = document.querySelector(".board-canvas") as HTMLCanvasElement;
     if (!canvas) return;
-
     const tempCanvas = document.createElement("canvas");
     tempCanvas.width = canvas.width;
     tempCanvas.height = canvas.height;
     const ctx = tempCanvas.getContext("2d");
     if (!ctx) return;
-
-    ctx.fillStyle = theme === "dark" ? "#010409" : "#f8fafc";
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-    ctx.drawImage(canvas, 0, 0);
-
-    const dataUrl = tempCanvas.toDataURL("image/png");
     const link = document.createElement("a");
     link.download = `whiteboard-${boardId.slice(0, 8)}.png`;
-    link.href = dataUrl;
+    link.href = tempCanvas.toDataURL("image/png");
     link.click();
-    setIsOpen(false);
   };
 
   // F1.11: Vector SVG Export
@@ -136,6 +162,18 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
     link.click();
     URL.revokeObjectURL(url);
     setIsOpen(false);
+  };
+
+  const removeRecentBoard = (idToRemove: string) => {
+    try {
+      const stored = localStorage.getItem("whiteboard_recent_boards");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        const filtered = parsed.filter((b: any) => b.id !== idToRemove);
+        localStorage.setItem("whiteboard_recent_boards", JSON.stringify(filtered));
+        setRecentBoards(filtered);
+      }
+    } catch {}
   };
 
   return (
@@ -153,12 +191,66 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
 
       {isOpen && (
         <div
+          className="sidebar-backdrop"
+          onClick={() => setIsOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 998,
+            background: "transparent"
+          }}
+        />
+      )}
+
+      {isOpen && (
+        <div
           className="sidebar-panel open"
           ref={panelRef}
           role="dialog"
           aria-label="Board settings and file menu"
           aria-modal={isOpen}
+          style={{ zIndex: 1000 }}
         >
+          <div
+            style={{
+              padding: "10px 14px",
+              borderBottom: "1px solid var(--panel-border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "6px"
+            }}
+          >
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>Whiteboard</div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
+            </div>
+            {saveStatus && (
+              <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: "var(--muted)" }}>
+                {saveStatus === "saving" && <Loader2 size={12} className="animate-spin" color="#60a5fa" />}
+                {saveStatus === "saved" && <CheckCircle2 size={12} color="#10b981" />}
+                {saveStatus === "conflict" && <Loader2 size={12} color="#f59e0b" />}
+                {saveStatus === "error" && <CloudOff size={12} color="#ef4444" />}
+                <span style={{ textTransform: "capitalize" }}>{saveStatus}</span>
+                {isViewer && (
+                  <span
+                    style={{
+                      background: "rgba(16, 185, 129, 0.15)",
+                      color: "#34d399",
+                      border: "1px solid #10b981",
+                      borderRadius: "9999px",
+                      padding: "1px 6px",
+                      fontSize: "9px",
+                      fontWeight: 700,
+                      marginLeft: "4px"
+                    }}
+                  >
+                    Viewer
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         <input 
           type="file" 
           ref={fileInputRef} 
@@ -215,6 +307,22 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
             <span>Reset the canvas</span>
           </div>
         </button>
+        <button
+          className="menu-item"
+          onClick={() => {
+            if (window.confirm("Permanently delete this board? This action cannot be undone.")) {
+              onDeleteBoard?.();
+              setIsOpen(false);
+            }
+          }}
+          aria-label="Delete this board"
+          style={{ color: "#ef4444" }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Trash2 size={16} />
+            <span>Delete board</span>
+          </div>
+        </button>
 
         <div className="menu-divider" />
 
@@ -239,6 +347,55 @@ export function Sidebar({ boardId, onClear, onShowShortcuts }: SidebarProps) {
             </button>
           </div>
         </div>
+
+        {/* P1-6: Recent Boards Drawer Section */}
+        {recentBoards.length > 0 && (
+          <>
+            <div className="menu-divider" />
+            <div className="sidebar-section">
+              <h4>Recent Boards</h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
+                {recentBoards.map((b) => (
+                  <div key={b.id} style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+                    <button
+                      className="menu-item"
+                      onClick={() => {
+                        setIsOpen(false);
+                        window.location.href = `/board/${b.id}`;
+                      }}
+                      style={{ fontSize: "12px", padding: "6px 8px", flex: 1, minWidth: 0, justifyContent: "flex-start" }}
+                    >
+                      <Clock size={13} style={{ color: "var(--muted)", flexShrink: 0, marginRight: "6px" }} />
+                      <span style={{ color: b.id === boardId ? "var(--accent)" : "inherit", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        Board #{b.id.slice(0, 8)} {b.id === boardId ? "(current)" : ""}
+                      </span>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRecentBoard(b.id);
+                      }}
+                      title="Remove from recents"
+                      aria-label={`Remove board ${b.id.slice(0, 8)} from recents`}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--muted)",
+                        cursor: "pointer",
+                        padding: "6px",
+                        display: "flex",
+                        alignItems: "center",
+                        borderRadius: "4px"
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="menu-divider" />
 

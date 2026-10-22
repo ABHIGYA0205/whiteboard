@@ -230,16 +230,24 @@ export function Canvas({ collaboration }: CanvasProps) {
           onBlur={(e) => handleTextBlur(e.target.value)}
           onChange={(e) => {
             const val = e.target.value;
+            e.target.style.height = "auto";
+            e.target.style.height = Math.max(editingElement.type === "sticky" ? 160 : 30, e.target.scrollHeight) + "px";
             if (editingElement.type !== "sticky") {
-              e.target.style.height = "auto";
-              e.target.style.height = e.target.scrollHeight + "px";
               e.target.style.width = "auto";
-              e.target.style.width = Math.max(e.target.scrollWidth, 50) + "px";
+              e.target.style.width = Math.max(e.target.scrollWidth, 60) + "px";
             }
+            // Auto-expand element height for multiline text or sticky note
+            const lines = val.split("\n");
+            const fontSize = editingElement.fontSize || (editingElement.type === "sticky" ? 18 : 20);
+            const neededHeight = Math.max(
+              editingElement.type === "sticky" ? 200 : fontSize * 1.5,
+              lines.length * fontSize * 1.4 + 40
+            );
+
             // Sync locally and emit element update in real-time
             const currentElements = useBoardStore.getState().elements;
             const nextElements = currentElements.map((el) =>
-              el.id === editingElement.id ? { ...el, text: val } : el
+              el.id === editingElement.id ? { ...el, text: val, height: neededHeight } : el
             );
             setElements(nextElements);
             const targetEl = nextElements.find((el) => el.id === editingElement.id);
@@ -251,7 +259,8 @@ export function Canvas({ collaboration }: CanvasProps) {
             if (e.key === "Escape") {
               handleTextBlur(e.currentTarget.value);
             }
-            if (e.key === "Enter" && !e.shiftKey && editingElement.type === "text") {
+            // Commit on Cmd+Enter / Ctrl+Enter; regular Enter adds newline
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               handleTextBlur(e.currentTarget.value);
             }

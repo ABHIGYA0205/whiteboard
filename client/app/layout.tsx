@@ -73,7 +73,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           background: "#010409",
           color: "#ececf1",
           fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          overflow: "hidden"
+          minHeight: "100vh",
+          overflowX: "hidden"
         }}
       >
         {children}

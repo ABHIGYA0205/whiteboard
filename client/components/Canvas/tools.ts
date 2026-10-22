@@ -6,16 +6,17 @@ export const TOOL_OPTIONS: Array<{
   shortcut: string;
   icon: string;
 }> = [
-  { id: "select", label: "Select", shortcut: "V", icon: "↗" },
-  { id: "pan", label: "Pan", shortcut: "H", icon: "✋" },
-  { id: "pencil", label: "Pencil", shortcut: "P", icon: "✏️" },
-  { id: "rectangle", label: "Rect", shortcut: "R", icon: "⬜" },
-  { id: "circle", label: "Circle", shortcut: "O", icon: "⭕" },
-  { id: "line", label: "Line", shortcut: "L", icon: "➖" },
-  { id: "arrow", label: "Arrow", shortcut: "A", icon: "↗️" },
+  { id: "pan", label: "Hand (Panning tool)", shortcut: "H", icon: "✋" },
+  { id: "select", label: "Selection", shortcut: "V", icon: "↖" },
+  { id: "rectangle", label: "Rectangle", shortcut: "R", icon: "▭" },
+  { id: "diamond", label: "Diamond", shortcut: "D", icon: "◇" },
+  { id: "circle", label: "Ellipse", shortcut: "O", icon: "◯" },
+  { id: "arrow", label: "Arrow", shortcut: "A", icon: "→" },
+  { id: "line", label: "Line", shortcut: "L", icon: "—" },
+  { id: "pencil", label: "Draw", shortcut: "P", icon: "✏️" },
   { id: "text", label: "Text", shortcut: "T", icon: "T" },
-  { id: "sticky", label: "Sticky Note", shortcut: "N", icon: "📝" },
-  { id: "image", label: "Image", shortcut: "I", icon: "🖼️" },
-  { id: "eraser", label: "Erase", shortcut: "E", icon: "⌫" },
-  { id: "laser", label: "Laser Pointer", shortcut: "K", icon: "✨" }
+  { id: "sticky", label: "Sticky Note", shortcut: "N", icon: "🗒" },
+  { id: "image", label: "Insert Image", shortcut: "I", icon: "🖼" },
+  { id: "eraser", label: "Eraser", shortcut: "E", icon: "⌫" },
+  { id: "laser", label: "Laser Pointer", shortcut: "K", icon: "✦" }
 ];

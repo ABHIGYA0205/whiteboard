@@ -32,7 +32,8 @@ import {
   Crosshair,
   LayoutTemplate,
   Workflow,
-  Check
+  Check,
+  Diamond
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -40,6 +41,7 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   pan: <Hand size={18} />,
   pencil: <Pencil size={18} />,
   rectangle: <Square size={18} />,
+  diamond: <Diamond size={18} />,
   circle: <Circle size={18} />,
   line: <Minus size={18} />,
   arrow: <MoveUpRight size={18} />,
@@ -370,7 +372,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
 
   const handleColorChange = (color: string) => {
     setStrokeColor(color);
-    if (selectedElementIds.length > 0) {
+    if (tool === "select" && selectedElementIds.length > 0) {
       const idSet = new Set(selectedElementIds);
       const nextElements = elements.map((el) =>
         idSet.has(el.id) ? { ...el, strokeColor: color } : el
@@ -422,31 +424,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
           </button>
         ))}
 
-        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "var(--panel-border)" }} />
-
-        <div className="color-picker-container" role="group" aria-label="Stroke color selection">
-          {getPaletteColors(theme).slice(0, 5).map((c) => (
-            <button
-              key={c.value}
-              className={`color-swatch ${strokeColor === c.value ? "active" : ""}`}
-              style={{ backgroundColor: c.value }}
-              onClick={() => handleColorChange(c.value)}
-              title={c.name}
-              aria-label={`Select ${c.name} stroke color`}
-            />
-          ))}
-          <div className="color-divider" />
-          <input
-            type="color"
-            className="custom-color-input"
-            value={strokeColor.startsWith("#") ? strokeColor : (theme === "light" ? "#1e293b" : "#ececf1")}
-            onChange={(e) => handleColorChange(e.target.value)}
-            title="Custom Color"
-            aria-label="Custom color picker"
-          />
-        </div>
-
-        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "var(--panel-border)" }} />
+        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
 
         {/* AI Enhancer and Style Selector */}
         <div className="ai-enhancer-group" ref={dropdownRef}>
@@ -527,31 +505,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
         >
           <Workflow size={16} />
         </button>
-
-        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
-
-        {/* A1.4: Confirm before destructive clear */}
-        <button
-          className="tool-button"
-          onClick={() => {
-            if (showClearConfirm) {
-              clearBoard();
-              setShowClearConfirm(false);
-            } else {
-              setShowClearConfirm(true);
-              setTimeout(() => setShowClearConfirm(false), 3500);
-            }
-          }}
-          title={showClearConfirm ? "Click again to confirm clearing board" : "Clear Canvas"}
-          aria-label={showClearConfirm ? "Confirm clear canvas" : "Clear Canvas"}
-          style={{ width: showClearConfirm ? "68px" : "36px", transition: "width 0.2s ease" }}
-        >
-          {showClearConfirm ? (
-            <span style={{ fontSize: "10px", color: "#ff4444", fontWeight: 800 }}>CONFIRM?</span>
-          ) : (
-            <Trash2 size={18} color="#ff4444" />
-          )}
-        </button>
       </nav>
 
       {/* Single clean floating progress toast below the toolbar */}
@@ -597,7 +550,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
               style={{
                 width: `${enhanceProgress > 0 ? enhanceProgress : ((30 - timer) / 30) * 100}%`,
                 height: "100%",
-                background: "linear-gradient(90deg, #8b5cf6, #ec4899)",
+                background: "#6366f1",
                 borderRadius: "2px",
                 transition: "width 0.4s ease"
               }}

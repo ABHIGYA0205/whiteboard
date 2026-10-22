@@ -311,15 +311,15 @@ export function AiImageModal({
       <div
         style={{
           position: "relative",
-          background: isLight ? "#ffffff" : "linear-gradient(160deg, #181926 0%, #0f1019 100%)",
-          border: isLight ? "1px solid rgba(0, 0, 0, 0.1)" : "1px solid rgba(255, 255, 255, 0.14)",
-          borderRadius: "24px",
+          background: isLight ? "#ffffff" : "#18181b",
+          border: isLight ? "1px solid rgba(0, 0, 0, 0.1)" : "1px solid rgba(255, 255, 255, 0.12)",
+          borderRadius: "20px",
           width: "100%",
           maxWidth: "600px",
           padding: "32px",
           boxShadow: isLight
             ? "0 25px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
-            : "0 30px 80px rgba(0, 0, 0, 0.8), 0 0 50px rgba(139, 92, 246, 0.22)",
+            : "0 30px 80px rgba(0, 0, 0, 0.8)",
           color: isLight ? "#0f172a" : "#f8fafc",
           display: "flex",
           flexDirection: "column",
@@ -331,37 +331,22 @@ export function AiImageModal({
         role="dialog"
         aria-label="AI Image Studio"
       >
-        {/* Subtle decorative radiant glow at top corner */}
-        <div
-          style={{
-            position: "absolute",
-            top: "-80px",
-            right: "-40px",
-            width: "240px",
-            height: "180px",
-            background: "linear-gradient(135deg, rgba(139, 92, 246, 0.4), rgba(236, 72, 153, 0.4))",
-            filter: "blur(60px)",
-            pointerEvents: "none"
-          }}
-        />
-
         {/* Modal Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
             <div
               style={{
-                width: "46px",
-                height: "46px",
-                borderRadius: "14px",
-                background: "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)",
+                width: "44px",
+                height: "44px",
+                borderRadius: "12px",
+                background: "#6366f1",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#ffffff",
-                boxShadow: "0 8px 20px rgba(139, 92, 246, 0.45)"
+                color: "#ffffff"
               }}
             >
-              <Wand2 size={24} />
+              <Wand2 size={22} />
             </div>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -644,7 +629,7 @@ export function AiImageModal({
                     width: `${progress}%`,
                     height: "100%",
                     borderRadius: "9999px",
-                    background: "linear-gradient(90deg, #8b5cf6, #ec4899)",
+                    background: "#6366f1",
                     transition: "width 0.3s ease"
                   }}
                 />
@@ -664,7 +649,7 @@ export function AiImageModal({
                   ? isLight
                     ? "#e2e8f0"
                     : "rgba(255, 255, 255, 0.08)"
-                  : "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)",
+                  : "#6366f1",
               color:
                 isGenerating || !prompt.trim()
                   ? isLight
@@ -675,7 +660,7 @@ export function AiImageModal({
               fontWeight: 700,
               fontSize: "15px",
               cursor: isGenerating || !prompt.trim() ? "not-allowed" : "pointer",
-              boxShadow: isGenerating || !prompt.trim() ? "none" : "0 6px 22px rgba(139, 92, 246, 0.45)",
+              boxShadow: isGenerating || !prompt.trim() ? "none" : "0 4px 14px rgba(99, 102, 241, 0.4)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",

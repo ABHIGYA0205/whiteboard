@@ -1,8 +1,8 @@
 "use client";
 
-import { createBoard } from "@/lib/api";
+import { createBoard, deleteBoardRemote } from "@/lib/api";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import {
   Sparkles,
   MousePointer2,
@@ -14,16 +14,45 @@ import {
   Share2,
   Layers,
   ArrowRight,
-  Shield,
-  Zap,
-  CheckCircle2,
-  Loader2
+  Download,
+  Loader2,
+  PenTool,
+  Check,
+  Clock,
+  Trash2
 } from "lucide-react";
 
 export default function HomePage() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [visibleItems, setVisibleItems] = useState<Record<string, boolean>>({});
+  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; visitedAt: number }>>([]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("whiteboard_recent_boards");
+        if (stored) {
+          setRecentBoards(JSON.parse(stored));
+        }
+      } catch {}
+    }
+  }, []);
+
+  const handleDeleteRecentBoard = async (idToDelete: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm("Permanently delete this board?")) return;
+    try {
+      await deleteBoardRemote(idToDelete);
+    } catch {}
+    const updated = recentBoards.filter((b) => b.id !== idToDelete);
+    setRecentBoards(updated);
+    try {
+      localStorage.setItem("whiteboard_recent_boards", JSON.stringify(updated));
+    } catch {}
+  };
 
   const handleCreateBoard = () => {
     startTransition(async () => {
@@ -41,424 +70,684 @@ export default function HomePage() {
     });
   };
 
+  // Scroll animation observer
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const id = entry.target.getAttribute("data-anim-id");
+            if (id) {
+              setVisibleItems((prev) => ({ ...prev, [id]: true }));
+            }
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -40px 0px" }
+    );
+
+    const elements = document.querySelectorAll("[data-anim-id]");
+    elements.forEach((el) => observer.observe(el));
+
+    return () => observer.disconnect();
+  }, []);
+
+  const features = [
+    {
+      id: "feat-1",
+      icon: <Users size={20} color="#818cf8" />,
+      title: "Multiplayer Live Presence",
+      badge: "Real-time Sync",
+      desc: "Synchronized live collaborator cursors, name badges, and element updates with sub-16ms latency across unlimited participants."
+    },
+    {
+      id: "feat-2",
+      icon: <Workflow size={20} color="#60a5fa" />,
+      title: "Prompt → Native Diagrams",
+      badge: "Editable Graphs",
+      desc: "Transform plain text system architecture descriptions into fully editable vector nodes, process flows, and connected cards."
+    },
+    {
+      id: "feat-3",
+      icon: <Wand2 size={20} color="#a78bfa" />,
+      title: "AI Studio & Image Gen",
+      badge: "7 Curated Styles",
+      desc: "Generate high-resolution illustrations directly on your canvas across Digital Art, Photorealistic, 3D Render, Anime, and Vector styles."
+    },
+    {
+      id: "feat-4",
+      icon: <LayoutTemplate size={20} color="#34d399" />,
+      title: "Curated Canvas Templates",
+      badge: "One-Click Setup",
+      desc: "Launch instantly with pre-built architectural flowcharts, Kanban boards, sprint retrospective matrices, and brainstorming mind maps."
+    },
+    {
+      id: "feat-5",
+      icon: <Layers size={20} color="#38bdf8" />,
+      title: "Multi-Select & Batch Drag",
+      badge: "Ergonomics",
+      desc: "Box-select groups of shapes, freehand sketches, and text cards to reposition, resize, align, or batch-delete seamlessly."
+    },
+    {
+      id: "feat-6",
+      icon: <Sparkles size={20} color="#f472b6" />,
+      title: "AI Sketch Enhancer",
+      badge: "Vector Refine",
+      desc: "Turn rough whiteboard doodles and freehand diagrams into clean, professional digital artwork with toolbar style presets."
+    },
+    {
+      id: "feat-7",
+      icon: <Compass size={20} color="#fbbf24" />,
+      title: "Interactive Radar Minimap",
+      badge: "Spatial View",
+      desc: "High-altitude overview showing live element locations across unbounded canvas coordinates with one-click viewport teleportation."
+    },
+    {
+      id: "feat-8",
+      icon: <Share2 size={20} color="#818cf8" />,
+      title: "Role-Based Board Sharing",
+      badge: "Permissions",
+      desc: "Secure shareable links with granular Editor or Viewer controls to present and review boards without accidental changes."
+    },
+    {
+      id: "feat-9",
+      icon: <Download size={20} color="#a3e635" />,
+      title: "Lossless Export & Snapshots",
+      badge: "Vector & JSON",
+      desc: "Export high-resolution transparent PNGs, scalable SVGs, or raw JSON snapshots for documentation, slides, and offline backups."
+    }
+  ];
+
   return (
     <main
-      className="home-shell-custom"
+      className="home-root"
       style={{
-        background: "radial-gradient(ellipse at top, #1e1b4b 0%, #0c0a1a 45%, #030712 100%)",
+        backgroundColor: "#090a10",
         minHeight: "100vh",
         width: "100%",
         margin: 0,
-        padding: "2.5rem 1.5rem 4rem",
+        padding: "0 1.5rem 5rem",
         boxSizing: "border-box",
-        color: "#ffffff",
+        color: "#f8fafc",
         display: "flex",
         flexDirection: "column",
-        alignItems: "center"
+        alignItems: "center",
+        overflowX: "hidden",
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif"
       }}
     >
-      <div className="home-container" style={{ maxWidth: "1240px", width: "100%" }}>
-        {/* Header / Nav */}
+      <div style={{ maxWidth: "1200px", width: "100%" }}>
+        {/* Navigation / Header */}
         <header
-          className="home-header"
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: "3.5rem",
-            padding: "0.5rem 0"
+            padding: "1.75rem 0",
+            borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
+            marginBottom: "3.5rem"
           }}
         >
+          {/* Logo */}
           <div
-            className="home-logo"
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "0.85rem",
-              fontWeight: 800,
-              fontSize: "1.45rem",
-              color: "#ffffff",
+              gap: "10px",
+              fontWeight: 700,
+              fontSize: "1.25rem",
               letterSpacing: "-0.02em"
             }}
           >
             <div
-              className="home-logo-icon"
               style={{
-                width: "36px",
-                height: "36px",
-                background: "linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%)",
-                borderRadius: "10px",
+                width: "32px",
+                height: "32px",
+                borderRadius: "8px",
+                background: "#1e1e2e",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#ffffff",
-                boxShadow: "0 4px 16px rgba(99, 102, 241, 0.4)"
+                color: "#818cf8"
               }}
             >
-              <Sparkles size={20} />
+              <PenTool size={16} />
             </div>
             <span>Whiteboard</span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-            <div
+          {/* Status Indicator (Clean & Professional) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 14px",
+              borderRadius: "9999px",
+              background: "rgba(255, 255, 255, 0.03)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              fontSize: "12px",
+              fontWeight: 500,
+              color: "#94a3b8"
+            }}
+          >
+            <span
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "6px 12px",
-                borderRadius: "9999px",
-                background: "rgba(16, 185, 129, 0.12)",
-                border: "1px solid rgba(16, 185, 129, 0.25)",
-                fontSize: "12px",
-                fontWeight: 600,
-                color: "#34d399"
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                backgroundColor: "#10b981",
+                boxShadow: "0 0 8px #10b981"
               }}
-            >
-              <span
-                style={{
-                  width: "6px",
-                  height: "6px",
-                  borderRadius: "50%",
-                  backgroundColor: "#10b981",
-                  boxShadow: "0 0 6px #10b981"
-                }}
-              />
-              <span>Multiplayer Live</span>
-            </div>
-
-            <button
-              onClick={handleCreateBoard}
-              disabled={isPending}
-              style={{
-                background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-                color: "#ffffff",
-                border: "none",
-                padding: "8px 18px",
-                fontSize: "13px",
-                fontWeight: 700,
-                borderRadius: "10px",
-                cursor: isPending ? "wait" : "pointer",
-                boxShadow: "0 4px 14px rgba(99, 102, 241, 0.35)",
-                transition: "all 0.2s ease"
-              }}
-            >
-              {isPending ? "Creating..." : "Open Canvas"}
-            </button>
+            />
+            <span>Multiplayer Engine Active</span>
           </div>
         </header>
 
-        {/* Hero Section */}
-        <section className="hero-section" style={{ margin: "1rem 0 5rem" }}>
-          {/* Left: Video / Preview */}
-          <div
-            className="hero-video-container"
-            style={{
-              borderRadius: "28px",
-              overflow: "hidden",
-              aspectRatio: "16/9",
-              position: "relative",
-              background: "#0c0d14",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
-              boxShadow: "0 30px 80px rgba(0, 0, 0, 0.7), 0 0 50px rgba(99, 102, 241, 0.2)"
-            }}
-          >
-            <video
-              src="/trailer.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="hero-video"
-              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              onError={(e) => {
-                e.currentTarget.style.display = "none";
-              }}
-            />
-            <div className="hero-video-overlay" />
-          </div>
-
-          {/* Right: Text Content */}
-          <div className="hero-text-container">
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 14px",
-                borderRadius: "9999px",
-                background: "linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(236, 72, 153, 0.2))",
-                border: "1px solid rgba(168, 85, 247, 0.35)",
-                fontSize: "12px",
-                fontWeight: 700,
-                color: "#f5d0fe",
-                marginBottom: "1.25rem"
-              }}
-            >
-              <Sparkles size={14} color="#d946ef" />
-              <span>Studio AI • Native Diagrams • Real-Time Multiplayer</span>
-            </div>
-
-            <h1 className="hero-title" style={{ fontSize: "clamp(2.4rem, 4.5vw, 3.8rem)", fontWeight: 800, lineHeight: 1.15 }}>
-              The infinite canvas for <br />
-              <span className="hero-title-gradient">limitless collaboration.</span>
-            </h1>
-
-            <p className="hero-description" style={{ fontSize: "1.15rem", lineHeight: 1.6, color: "#94a3b8", margin: "1.25rem 0 2rem" }}>
-              Sketch freely, generate AI artwork in 7 styles, build editable architecture diagrams from text prompts, and brainstorm in real time with your team.
-            </p>
-
-            <div className="hero-button-wrapper" style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
-              <button
-                onClick={handleCreateBoard}
-                disabled={isPending}
-                className="hero-button"
-                style={{
-                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%)",
-                  color: "#ffffff",
-                  border: "none",
-                  padding: "1.15rem 2.25rem",
-                  fontSize: "1.1rem",
-                  fontWeight: 700,
-                  borderRadius: "14px",
-                  cursor: isPending ? "wait" : "pointer",
-                  boxShadow: "0 10px 30px rgba(99, 102, 241, 0.45)",
-                  transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "10px"
-                }}
-              >
-                {isPending ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin" />
-                    <span>Launching Canvas...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Create New Board</span>
-                    <ArrowRight size={18} />
-                  </>
-                )}
-              </button>
-            </div>
-            {error && <p className="hero-error" style={{ color: "#ef4444", marginTop: "1rem" }}>{error}</p>}
-          </div>
-        </section>
-
-        {/* Quick Value Metrics Bar */}
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: "1.25rem",
-            marginBottom: "4.5rem",
-            padding: "1.5rem",
-            borderRadius: "20px",
-            background: "rgba(255, 255, 255, 0.02)",
-            border: "1px solid rgba(255, 255, 255, 0.06)",
-            backdropFilter: "blur(12px)"
-          }}
-        >
-          {[
-            { label: "Live Collaboration", value: "Figma & Canva Style", desc: "Live cursors & presence stack" },
-            { label: "AI Image Studio", value: "7 Curated Art Styles", desc: "High-resolution artwork generation" },
-            { label: "Vector Diagrams", value: "Prompt → Native Graph", desc: "Editable boxes, labels & connectors" },
-            { label: "Batch Transforms", value: "Multi-Select Box", desc: "Drag, reshape & delete together" }
-          ].map((item, idx) => (
-            <div key={idx} style={{ padding: "0.5rem" }}>
-              <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#818cf8" }}>
-                {item.label}
-              </div>
-              <div style={{ fontSize: "17px", fontWeight: 800, color: "#f8fafc", margin: "4px 0" }}>
-                {item.value}
-              </div>
-              <div style={{ fontSize: "12px", color: "#64748b" }}>
-                {item.desc}
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {/* Features Grid */}
-        <div style={{ textAlign: "center", marginBottom: "2.5rem" }}>
-          <h2 style={{ fontSize: "2rem", fontWeight: 800, margin: "0 0 0.5rem", color: "#f8fafc", letterSpacing: "-0.02em" }}>
-            Engineered for Modern Teams
-          </h2>
-          <p style={{ color: "#94a3b8", fontSize: "1.05rem", margin: 0 }}>
-            Everything you need for visual thinking, sprint planning, and generative AI design.
-          </p>
-        </div>
-
-        <section
-          className="features-grid-custom"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: "1.5rem",
-            marginBottom: "5rem"
-          }}
-        >
-          {[
-            {
-              icon: <Users size={24} color="#818cf8" />,
-              title: "Multiplayer Live Presence",
-              badge: "Figma & Canva Style",
-              desc: "See teammates' live named cursors, collaborator avatar stacks, and real-time edits synchronized with zero perceptible lag."
-            },
-            {
-              icon: <Wand2 size={24} color="#ec4899" />,
-              title: "AI Image Studio",
-              badge: "7 Art Styles",
-              desc: "Generate vibrant illustrations directly on your canvas across Digital Art, Photorealistic, 3D Render, Anime, Cyberpunk, Watercolor, and Vector styles."
-            },
-            {
-              icon: <Workflow size={24} color="#6366f1" />,
-              title: "Prompt → Native Diagrams",
-              badge: "Editable Graphs",
-              desc: "Transform plain text flow descriptions into fully editable vector nodes, process cards, and connector arrows in seconds."
-            },
-            {
-              icon: <LayoutTemplate size={24} color="#a855f7" />,
-              title: "Smart Workspace Templates",
-              badge: "One-Click Load",
-              desc: "Instant pre-built boards including Software Flowcharts, Kanban Boards, Sprint Retrospectives, and Brainstorming Mind Maps."
-            },
-            {
-              icon: <Layers size={24} color="#06b6d4" />,
-              title: "Multi-Select & Batch Drag",
-              badge: "Canvas Ergonomics",
-              desc: "Click and drag to box-select multiple drawings, shapes, and notes. Reposition, resize, reshape, or batch-delete effortlessly."
-            },
-            {
-              icon: <Sparkles size={24} color="#d946ef" />,
-              title: "AI Sketch Enhancer",
-              badge: "Instant Polishing",
-              desc: "Turn rough doodles and hand-drawn whiteboard sketches into high-fidelity graphics with intelligent style presets on the toolbar."
-            },
-            {
-              icon: <Compass size={24} color="#10b981" />,
-              title: "Interactive Radar Minimap",
-              badge: "Spatial Navigation",
-              desc: "High-altitude radar view showing real-time element locations across infinite coordinates with instant click-to-pan."
-            },
-            {
-              icon: <Share2 size={24} color="#3b82f6" />,
-              title: "Role-Based Board Sharing",
-              badge: "Editor vs. Viewer",
-              desc: "Generate secure shareable links with Editor or View-Only permission controls to present work safely without accidental changes."
-            }
-          ].map((feature, i) => (
-            <div
-              key={i}
-              className="feature-item-custom"
-              style={{
-                background: "rgba(255, 255, 255, 0.03)",
-                border: "1px solid rgba(255, 255, 255, 0.07)",
-                borderRadius: "20px",
-                padding: "2rem",
-                backdropFilter: "blur(10px)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "12px",
-                transition: "all 0.25s ease"
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div
-                  className="feature-icon-wrapper"
-                  style={{
-                    width: "48px",
-                    height: "48px",
-                    borderRadius: "12px",
-                    background: "rgba(99, 102, 241, 0.12)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    border: "1px solid rgba(99, 102, 241, 0.25)"
-                  }}
-                >
-                  {feature.icon}
-                </div>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    fontWeight: 700,
-                    padding: "3px 8px",
-                    borderRadius: "9999px",
-                    background: "rgba(255, 255, 255, 0.05)",
-                    border: "1px solid rgba(255, 255, 255, 0.1)",
-                    color: "#cbd5e1"
-                  }}
-                >
-                  {feature.badge}
-                </span>
-              </div>
-              <h3 className="feature-title" style={{ fontSize: "1.2rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>
-                {feature.title}
-              </h3>
-              <p className="feature-desc" style={{ color: "#94a3b8", fontSize: "0.95rem", lineHeight: 1.6, margin: 0 }}>
-                {feature.desc}
-              </p>
-            </div>
-          ))}
-        </section>
-
-        {/* Bottom CTA Banner */}
+        {/* Hero Section - Focused, Clean, Professional */}
         <section
           style={{
             textAlign: "center",
-            padding: "3.5rem 2rem",
-            borderRadius: "24px",
-            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(217, 70, 239, 0.15) 100%)",
-            border: "1px solid rgba(168, 85, 247, 0.3)",
-            marginBottom: "4rem"
+            padding: "2rem 0 4rem",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center"
           }}
         >
-          <h3 style={{ fontSize: "1.85rem", fontWeight: 800, margin: "0 0 0.75rem", color: "#ffffff" }}>
-            Start sketching on your infinite canvas
-          </h3>
-          <p style={{ color: "#cbd5e1", maxWidth: "540px", margin: "0 auto 1.75rem", fontSize: "1.05rem" }}>
-            No sign-up required. Launch an instant whiteboard session and invite your team in real time.
-          </p>
-          <button
-            onClick={handleCreateBoard}
-            disabled={isPending}
+          {/* Headline */}
+          <h1
             style={{
-              background: "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)",
-              color: "#ffffff",
-              border: "none",
-              padding: "1rem 2.25rem",
-              fontSize: "1.05rem",
-              fontWeight: 700,
-              borderRadius: "12px",
-              cursor: isPending ? "wait" : "pointer",
-              boxShadow: "0 8px 24px rgba(99, 102, 241, 0.4)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "8px"
+              fontSize: "clamp(2.5rem, 5.5vw, 4.25rem)",
+              fontWeight: 800,
+              lineHeight: 1.1,
+              letterSpacing: "-0.03em",
+              maxWidth: "880px",
+              margin: "0 0 1.5rem",
+              color: "#ffffff"
             }}
           >
-            <span>Launch Whiteboard</span>
-            <ArrowRight size={16} />
-          </button>
+            The infinite canvas built for <br />
+            <span style={{ color: "#93c5fd" }}>real-time collaboration.</span>
+          </h1>
+
+          {/* Subtitle */}
+          <p
+            style={{
+              fontSize: "clamp(1.05rem, 2vw, 1.25rem)",
+              lineHeight: 1.6,
+              color: "#94a3b8",
+              maxWidth: "620px",
+              margin: "0 0 2.5rem"
+            }}
+          >
+            Sketch diagrams, generate editable flowcharts from prompts, and collaborate simultaneously with your team with sub-second sync.
+          </p>
+
+          {/* THE ONLY BOARD CREATION BUTTON */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+            <button
+              onClick={handleCreateBoard}
+              disabled={isPending}
+              id="hero-create-board-btn"
+              style={{
+                backgroundColor: "#6366f1",
+                color: "#ffffff",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                padding: "1rem 2.25rem",
+                fontSize: "1.05rem",
+                fontWeight: 600,
+                borderRadius: "12px",
+                cursor: isPending ? "wait" : "pointer",
+                boxShadow: "0 4px 16px rgba(99, 102, 241, 0.4)",
+                transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "10px"
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "translateY(-2px)";
+                e.currentTarget.style.backgroundColor = "#4f46e5";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "none";
+                e.currentTarget.style.backgroundColor = "#6366f1";
+              }}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  <span>Launching Canvas...</span>
+                </>
+              ) : (
+                <>
+                  <span>Create New Board</span>
+                  <ArrowRight size={18} />
+                </>
+              )}
+            </button>
+            <span style={{ fontSize: "12px", color: "#64748b" }}>Instant launch • No account required</span>
+
+            {/* P1-6: Jump back into recent boards */}
+            {recentBoards.length > 0 && (
+              <div style={{ marginTop: "1.75rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Your Recent Boards
+                </span>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center" }}>
+                  {recentBoards.slice(0, 6).map((b) => (
+                    <div
+                      key={b.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        background: "rgba(255, 255, 255, 0.04)",
+                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        borderRadius: "10px",
+                        padding: "0 6px 0 12px",
+                        transition: "all 0.15s ease"
+                      }}
+                    >
+                      <a
+                        href={`/board/${b.id}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          padding: "8px 0",
+                          color: "#e2e8f0",
+                          fontSize: "12px",
+                          textDecoration: "none"
+                        }}
+                      >
+                        <Clock size={13} color="#818cf8" />
+                        <span>Board #{b.id.slice(0, 8)}</span>
+                      </a>
+                      <button
+                        onClick={(e) => handleDeleteRecentBoard(b.id, e)}
+                        title="Delete board"
+                        aria-label={`Delete board ${b.id.slice(0, 8)}`}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#64748b",
+                          cursor: "pointer",
+                          padding: "6px",
+                          marginLeft: "4px",
+                          display: "flex",
+                          alignItems: "center",
+                          borderRadius: "4px"
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = "#64748b")}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {error && <p style={{ color: "#ef4444", marginTop: "1rem", fontSize: "14px" }}>{error}</p>}
+
+          {/* Interactive Canvas Preview Mockup (replaces broken video) */}
+          <div
+            style={{
+              marginTop: "3.5rem",
+              width: "100%",
+              maxWidth: "1080px",
+              borderRadius: "20px",
+              background: "#0c0d16",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              boxShadow: "0 25px 60px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.03)",
+              overflow: "hidden",
+              position: "relative"
+            }}
+          >
+            {/* Window bar */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 18px",
+                borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
+                background: "#0f101b"
+              }}
+            >
+              <div style={{ display: "flex", gap: "6px" }}>
+                <span style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#ef4444", opacity: 0.8 }} />
+                <span style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#f59e0b", opacity: 0.8 }} />
+                <span style={{ width: "10px", height: "10px", borderRadius: "50%", background: "#10b981", opacity: 0.8 }} />
+              </div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "#64748b",
+                  fontWeight: 500,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+              >
+                <span>whiteboard.session — live canvas</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <div style={{ width: "18px", height: "18px", borderRadius: "50%", background: "#f43f5e", fontSize: "9px", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>A</div>
+                <div style={{ width: "18px", height: "18px", borderRadius: "50%", background: "#3b82f6", fontSize: "9px", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, marginLeft: "-4px" }}>S</div>
+              </div>
+            </div>
+
+            {/* Canvas mockup body */}
+            <div
+              style={{
+                position: "relative",
+                height: "360px",
+                backgroundImage: "radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px)",
+                backgroundSize: "24px 24px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "20px"
+              }}
+            >
+              {/* Flowchart Diagram Mockup */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "28px",
+                  zIndex: 2,
+                  flexWrap: "wrap",
+                  justifyContent: "center"
+                }}
+              >
+                {/* Node 1 */}
+                <div
+                  style={{
+                    background: "rgba(30, 41, 59, 0.85)",
+                    border: "1px solid rgba(99, 102, 241, 0.4)",
+                    borderRadius: "12px",
+                    padding: "12px 18px",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                    minWidth: "130px",
+                    textAlign: "left"
+                  }}
+                >
+                  <div style={{ fontSize: "10px", color: "#818cf8", fontWeight: 700, textTransform: "uppercase" }}>Input</div>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#f8fafc", marginTop: "2px" }}>User Prompt</div>
+                </div>
+
+                {/* Arrow */}
+                <div style={{ color: "#64748b", fontWeight: 700, fontSize: "18px" }}>→</div>
+
+                {/* Node 2 */}
+                <div
+                  style={{
+                    background: "rgba(30, 41, 59, 0.85)",
+                    border: "1px solid rgba(168, 85, 247, 0.4)",
+                    borderRadius: "12px",
+                    padding: "12px 18px",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                    minWidth: "150px",
+                    textAlign: "left"
+                  }}
+                >
+                  <div style={{ fontSize: "10px", color: "#a855f7", fontWeight: 700, textTransform: "uppercase" }}>AI Pipeline</div>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#f8fafc", marginTop: "2px" }}>Auto-Layout Graph</div>
+                </div>
+
+                {/* Arrow */}
+                <div style={{ color: "#64748b", fontWeight: 700, fontSize: "18px" }}>→</div>
+
+                {/* Node 3 */}
+                <div
+                  style={{
+                    background: "rgba(30, 41, 59, 0.85)",
+                    border: "1px solid rgba(16, 185, 129, 0.4)",
+                    borderRadius: "12px",
+                    padding: "12px 18px",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                    minWidth: "140px",
+                    textAlign: "left"
+                  }}
+                >
+                  <div style={{ fontSize: "10px", color: "#10b981", fontWeight: 700, textTransform: "uppercase" }}>Result</div>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#f8fafc", marginTop: "2px" }}>Vector Diagram</div>
+                </div>
+              </div>
+
+              {/* Sticky note mockup */}
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "30px",
+                  left: "40px",
+                  background: "rgba(254, 240, 138, 0.12)",
+                  border: "1px solid rgba(254, 240, 138, 0.3)",
+                  borderRadius: "10px",
+                  padding: "10px 14px",
+                  color: "#fef08a",
+                  fontSize: "12px",
+                  maxWidth: "160px",
+                  lineHeight: 1.4,
+                  transform: "rotate(-3deg)",
+                  boxShadow: "0 8px 16px rgba(0,0,0,0.3)"
+                }}
+              >
+                💡 Ready for sprint review at 3pm!
+              </div>
+
+              {/* Floating Collaborator Cursor 1 */}
+              <div
+                className="floating-cursor-1"
+                style={{
+                  position: "absolute",
+                  top: "60px",
+                  left: "30%",
+                  pointerEvents: "none",
+                  zIndex: 10
+                }}
+              >
+                <MousePointer2 size={18} color="#f43f5e" fill="#f43f5e" />
+                <div
+                  style={{
+                    background: "#f43f5e",
+                    color: "#ffffff",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    padding: "2px 6px",
+                    borderRadius: "4px",
+                    marginTop: "2px",
+                    marginLeft: "10px"
+                  }}
+                >
+                  Alex
+                </div>
+              </div>
+
+              {/* Floating Collaborator Cursor 2 */}
+              <div
+                className="floating-cursor-2"
+                style={{
+                  position: "absolute",
+                  bottom: "70px",
+                  right: "26%",
+                  pointerEvents: "none",
+                  zIndex: 10
+                }}
+              >
+                <MousePointer2 size={18} color="#3b82f6" fill="#3b82f6" />
+                <div
+                  style={{
+                    background: "#3b82f6",
+                    color: "#ffffff",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    padding: "2px 6px",
+                    borderRadius: "4px",
+                    marginTop: "2px",
+                    marginLeft: "10px"
+                  }}
+                >
+                  Sarah
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Section Header */}
+        <div
+          data-anim-id="features-header"
+          style={{
+            textAlign: "center",
+            margin: "4rem 0 2.5rem",
+            opacity: visibleItems["features-header"] ? 1 : 0,
+            transform: visibleItems["features-header"] ? "translateY(0)" : "translateY(20px)",
+            transition: "all 0.6s cubic-bezier(0.16, 1, 0.3, 1)"
+          }}
+        >
+          <h2
+            style={{
+              fontSize: "clamp(1.75rem, 3.5vw, 2.35rem)",
+              fontWeight: 800,
+              letterSpacing: "-0.02em",
+              color: "#ffffff",
+              margin: "0 0 0.5rem"
+            }}
+          >
+            Engineered for Modern Engineering Teams
+          </h2>
+          <p style={{ color: "#94a3b8", fontSize: "1rem", margin: 0 }}>
+            Nine integrated capabilities for high-velocity visual thinking and planning.
+          </p>
+        </div>
+
+        {/* Features Grid: EXACTLY 9 CARDS in an even, balanced 3x3 layout */}
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+            gap: "1.25rem",
+            marginBottom: "5rem"
+          }}
+        >
+          {features.map((item, idx) => {
+            const isVisible = visibleItems[item.id];
+            return (
+              <div
+                key={item.id}
+                data-anim-id={item.id}
+                className="feature-card-clean"
+                style={{
+                  background: "#11121c",
+                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  borderRadius: "16px",
+                  padding: "1.75rem",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px",
+                  opacity: isVisible ? 1 : 0,
+                  transform: isVisible ? "translateY(0)" : "translateY(24px)",
+                  transition: `all 0.5s cubic-bezier(0.16, 1, 0.3, 1) ${idx * 0.06}s`,
+                  boxShadow: "0 4px 20px rgba(0, 0, 0, 0.2)"
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      borderRadius: "10px",
+                      background: "rgba(255, 255, 255, 0.04)",
+                      border: "1px solid rgba(255, 255, 255, 0.08)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    {item.icon}
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: "6px",
+                      background: "rgba(255, 255, 255, 0.05)",
+                      border: "1px solid rgba(255, 255, 255, 0.08)",
+                      color: "#94a3b8"
+                    }}
+                  >
+                    {item.badge}
+                  </span>
+                </div>
+
+                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#f8fafc", margin: 0 }}>
+                  {item.title}
+                </h3>
+
+                <p style={{ color: "#94a3b8", fontSize: "0.925rem", lineHeight: 1.6, margin: 0 }}>
+                  {item.desc}
+                </p>
+              </div>
+            );
+          })}
         </section>
 
         {/* Footer */}
         <footer
-          className="home-footer"
           style={{
-            padding: "2rem 0",
+            padding: "2.5rem 0 1rem",
             borderTop: "1px solid rgba(255, 255, 255, 0.06)",
             textAlign: "center",
             color: "#64748b",
-            fontSize: "0.875rem"
+            fontSize: "0.85rem",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "8px"
           }}
         >
-          <p style={{ margin: 0 }}>© {new Date().getFullYear()} Whiteboard. Built for professional visual thinking and team collaboration.</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "#94a3b8" }}>
+            <Check size={14} color="#10b981" />
+            <span>Zero install required • Works in all modern browsers</span>
+          </div>
+          <p style={{ margin: "4px 0 0" }}>
+            © {new Date().getFullYear()} Whiteboard. Professional infinite canvas for high-performance teams.
+          </p>
         </footer>
       </div>
+
+      {/* Floating animation keyframes for preview cursor motions */}
+      <style>{`
+        @keyframes cursorDrift1 {
+          0%, 100% { transform: translate(0, 0); }
+          50% { transform: translate(25px, -15px); }
+        }
+        @keyframes cursorDrift2 {
+          0%, 100% { transform: translate(0, 0); }
+          50% { transform: translate(-30px, 12px); }
+        }
+        .floating-cursor-1 {
+          animation: cursorDrift1 4.5s ease-in-out infinite;
+        }
+        .floating-cursor-2 {
+          animation: cursorDrift2 5.5s ease-in-out infinite;
+        }
+        .feature-card-clean {
+          transition: transform 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
+        }
+        .feature-card-clean:hover {
+          transform: translateY(-4px) !important;
+          border-color: rgba(99, 102, 241, 0.35) !important;
+          background-color: #141624 !important;
+        }
+      `}</style>
     </main>
   );
 }

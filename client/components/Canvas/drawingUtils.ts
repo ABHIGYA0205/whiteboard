@@ -37,7 +37,14 @@ export function createElement(
   start: Point,
   color: string,
   strokeWidth: number,
-  fillColor: string = "transparent"
+  fillColor: string = "transparent",
+  options?: {
+    strokeStyle?: "solid" | "dashed" | "dotted";
+    fillStyle?: "transparent" | "semi" | "solid";
+    roughness?: number;
+    roundness?: boolean;
+    opacity?: number;
+  }
 ): WhiteboardElement {
   const isSticky = type === "sticky";
   return {
@@ -50,6 +57,11 @@ export function createElement(
     strokeColor: isSticky ? "#ca8a04" : color,
     fillColor: isSticky ? "#fef08a" : fillColor,
     strokeWidth: isSticky ? 1 : strokeWidth,
+    strokeStyle: options?.strokeStyle || "solid",
+    fillStyle: options?.fillStyle || (fillColor !== "transparent" ? "solid" : "transparent"),
+    roughness: options?.roughness ?? 0,
+    roundness: options?.roundness ?? false,
+    opacity: options?.opacity ?? 1,
     points: type === "pencil" ? [start] : [],
     ...(type === "text" || isSticky ? { text: "", fontSize: isSticky ? 18 : 24 } : {})
   };
@@ -115,15 +127,41 @@ export function drawElement(
 ) {
   const effectiveStrokeColor = getContrastStrokeColor(element.strokeColor, theme);
   context.save();
+
+  if (typeof element.opacity === "number") {
+    context.globalAlpha = Math.max(0, Math.min(1, element.opacity));
+  }
+
   context.lineWidth = element.strokeWidth;
   context.strokeStyle = effectiveStrokeColor;
-  if (element.fillColor && element.fillColor !== "transparent") {
-    context.fillStyle = element.fillColor;
-  }
   context.lineCap = "round";
   context.lineJoin = "round";
 
+  if (element.strokeStyle === "dashed") {
+    context.setLineDash([element.strokeWidth * 4 + 2, element.strokeWidth * 3 + 2]);
+  } else if (element.strokeStyle === "dotted") {
+    context.setLineDash([element.strokeWidth, element.strokeWidth * 2 + 2]);
+  } else {
+    context.setLineDash([]);
+  }
+
+  const hasFill = element.fillColor && element.fillColor !== "transparent";
   const bounds = getNormalizedBounds(element);
+
+  const applyFill = (pathCallback?: () => void) => {
+    if (!hasFill) return;
+    context.save();
+    if (element.fillStyle === "semi") {
+      context.globalAlpha = (context.globalAlpha || 1) * 0.35;
+    }
+    context.fillStyle = element.fillColor!;
+    if (pathCallback) {
+      pathCallback();
+    } else {
+      context.fill();
+    }
+    context.restore();
+  };
 
   if (element.type === "pencil") {
     const [firstPoint, ...rest] = element.points;
@@ -137,10 +175,41 @@ export function drawElement(
   }
 
   if (element.type === "rectangle") {
-    if (element.fillColor && element.fillColor !== "transparent") {
-      context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    const isRounded = Boolean(element.roundness);
+    const radius = isRounded ? Math.min(16, bounds.width / 4, bounds.height / 4) : 0;
+
+    context.beginPath();
+    if (radius > 0 && typeof context.roundRect === "function") {
+      context.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+    } else {
+      context.rect(bounds.x, bounds.y, bounds.width, bounds.height);
     }
-    context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+
+    if (hasFill) {
+      applyFill();
+    }
+    context.stroke();
+
+    if (element.text) {
+      drawShapeText(context, element.text, bounds, effectiveStrokeColor, element.fontSize || 16);
+    }
+  }
+
+  if (element.type === "diamond") {
+    const cx = bounds.x + bounds.width / 2;
+    const cy = bounds.y + bounds.height / 2;
+    context.beginPath();
+    context.moveTo(cx, bounds.y);
+    context.lineTo(bounds.x + bounds.width, cy);
+    context.lineTo(cx, bounds.y + bounds.height);
+    context.lineTo(bounds.x, cy);
+    context.closePath();
+
+    if (hasFill) {
+      applyFill();
+    }
+    context.stroke();
+
     if (element.text) {
       drawShapeText(context, element.text, bounds, effectiveStrokeColor, element.fontSize || 16);
     }
@@ -157,8 +226,8 @@ export function drawElement(
       0,
       Math.PI * 2
     );
-    if (element.fillColor && element.fillColor !== "transparent") {
-      context.fill();
+    if (hasFill) {
+      applyFill();
     }
     context.stroke();
     if (element.text) {
@@ -216,30 +285,41 @@ export function drawElement(
     context.stroke();
 
     if (element.text) {
+      context.save();
+      context.beginPath();
+      context.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+      context.clip();
+
       context.font = `${element.fontSize || 18}px "Inter", "Segoe UI", sans-serif`;
       context.fillStyle = "#1e293b";
       context.textBaseline = "top";
       const padding = 16;
       const maxWidth = bounds.width - padding * 2;
       const lineHeight = (element.fontSize || 18) * 1.3;
-      const words = element.text.split(" ");
-      let currentLine = "";
+
+      const paragraphs = element.text.split("\n");
       let y = bounds.y + padding;
 
-      for (let n = 0; n < words.length; n++) {
-        const testLine = currentLine ? `${currentLine} ${words[n]}` : words[n];
-        const metrics = context.measureText(testLine);
-        if (metrics.width > maxWidth && n > 0) {
+      for (const para of paragraphs) {
+        const words = para.split(" ");
+        let currentLine = "";
+        for (let n = 0; n < words.length; n++) {
+          const testLine = currentLine ? `${currentLine} ${words[n]}` : words[n];
+          const metrics = context.measureText(testLine);
+          if (metrics.width > maxWidth && n > 0) {
+            context.fillText(currentLine, bounds.x + padding, y);
+            currentLine = words[n];
+            y += lineHeight;
+          } else {
+            currentLine = testLine;
+          }
+        }
+        if (currentLine) {
           context.fillText(currentLine, bounds.x + padding, y);
-          currentLine = words[n];
           y += lineHeight;
-        } else {
-          currentLine = testLine;
         }
       }
-      if (currentLine) {
-        context.fillText(currentLine, bounds.x + padding, y);
-      }
+      context.restore();
     }
   }
 
@@ -338,6 +418,7 @@ export function hitTestElement(
 
   if (
     element.type === "rectangle" ||
+    element.type === "diamond" ||
     element.type === "circle" ||
     element.type === "text" ||
     element.type === "image" ||
@@ -584,7 +665,8 @@ export function drawShapeText(
  * a base64-encoded PNG data URL by drawing them onto an offscreen canvas.
  */
 export function exportSelectionToImage(
-  elements: WhiteboardElement[]
+  elements: WhiteboardElement[],
+  backgroundColor: string = "#ffffff"
 ): string | null {
   if (elements.length === 0) return null;
 
@@ -611,7 +693,7 @@ export function exportSelectionToImage(
     }
   }
 
-  const padding = 20;
+  const padding = 24;
   const width = maxX - minX + padding * 2;
   const height = maxY - minY + padding * 2;
 
@@ -623,8 +705,7 @@ export function exportSelectionToImage(
   const ctx = offscreen.getContext("2d");
   if (!ctx) return null;
 
-  // White background for the AI model
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, width, height);
 
   // Translate so our bounding box starts at (padding, padding)

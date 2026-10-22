@@ -95,6 +95,12 @@ export function clearBoardRemote(id: string) {
   return saveBoard(id, []);
 }
 
+export function deleteBoardRemote(id: string) {
+  return request<{ success: boolean; message?: string }>(`/board/${id}`, {
+    method: "DELETE"
+  });
+}
+
 export function uploadImage(imageBase64: string) {
   return request<{ url: string }>("/board/upload", {
     method: "POST",

@@ -288,3 +288,15 @@ export async function applyBoardOps(
   inMemoryBoards.set(id, updatedDoc);
   return updatedDoc;
 }
+
+export async function deleteBoard(id: string): Promise<boolean> {
+  if (isMongoConnected()) {
+    try {
+      await BoardModel.deleteOne({ id });
+    } catch {
+      // fallback to memory
+    }
+  }
+  inMemoryBoards.delete(id);
+  return true;
+}

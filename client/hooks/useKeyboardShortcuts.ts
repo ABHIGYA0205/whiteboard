@@ -15,6 +15,7 @@ const SHORTCUT_TO_TOOL: Record<string, ToolType> = {
   h: "pan",
   p: "pencil",
   r: "rectangle",
+  d: "diamond",
   o: "circle",
   l: "line",
   a: "arrow",
@@ -45,16 +46,31 @@ export function useKeyboardShortcuts({
   const bringToFront = useBoardStore((state) => state.bringToFront);
   const sendToBack = useBoardStore((state) => state.sendToBack);
   const resetViewport = useBoardStore((state) => state.resetViewport);
+  const selectElement = useBoardStore((state) => state.selectElement);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
-      if (activeTag === "INPUT" || activeTag === "TEXTAREA") {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isTyping =
+        activeEl?.tagName === "INPUT" ||
+        activeEl?.tagName === "TEXTAREA" ||
+        Boolean(activeEl?.isContentEditable) ||
+        Boolean(useBoardStore.getState().editingElementId);
+
+      if (isTyping) {
         return;
       }
 
       const key = event.key.toLowerCase();
       const isMeta = event.metaKey || event.ctrlKey;
+
+      // Select all elements on canvas (Cmd+A / Ctrl+A)
+      if (isMeta && key === "a") {
+        event.preventDefault();
+        const allElements = useBoardStore.getState().elements;
+        selectElement(allElements.map((el) => el.id));
+        return;
+      }
 
       if (isMeta && key === "z" && event.shiftKey) {
         event.preventDefault();

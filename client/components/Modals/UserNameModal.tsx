@@ -73,15 +73,15 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
       <div
         style={{
           position: "relative",
-          background: isLight ? "#ffffff" : "linear-gradient(160deg, #181926 0%, #0f1019 100%)",
+          background: isLight ? "#ffffff" : "#18181b",
           border: isLight ? "1px solid rgba(0, 0, 0, 0.1)" : "1px solid rgba(255, 255, 255, 0.12)",
-          borderRadius: "24px",
+          borderRadius: "20px",
           width: "100%",
           maxWidth: "440px",
           padding: "36px 32px 32px",
           boxShadow: isLight
             ? "0 25px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
-            : "0 30px 80px rgba(0, 0, 0, 0.8), 0 0 40px rgba(99, 102, 241, 0.2)",
+            : "0 30px 80px rgba(0, 0, 0, 0.8)",
           display: "flex",
           flexDirection: "column",
           gap: "24px",
@@ -90,39 +90,22 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top ambient glow */}
-        <div
-          style={{
-            position: "absolute",
-            top: "-60px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "200px",
-            height: "100px",
-            background: "linear-gradient(135deg, #6366f1, #d946ef)",
-            filter: "blur(50px)",
-            opacity: isLight ? 0.25 : 0.45,
-            pointerEvents: "none"
-          }}
-        />
-
         {/* Avatar header */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", position: "relative" }}>
           <div
             style={{
               position: "relative",
-              width: "68px",
-              height: "68px",
+              width: "64px",
+              height: "64px",
               borderRadius: "50%",
-              background: "linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%)",
+              background: "#6366f1",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontSize: "22px",
               fontWeight: 800,
               color: "#ffffff",
-              boxShadow: "0 8px 24px rgba(99, 102, 241, 0.45)",
-              border: "3px solid rgba(255, 255, 255, 0.25)"
+              border: "3px solid rgba(255, 255, 255, 0.2)"
             }}
           >
             {name.trim() ? getInitials(name) : <Sparkles size={28} />}
@@ -201,7 +184,7 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
               padding: "13px 24px",
               borderRadius: "14px",
               background: name.trim()
-                ? "linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%)"
+                ? "#6366f1"
                 : isLight
                 ? "#e2e8f0"
                 : "rgba(255, 255, 255, 0.08)",
@@ -210,7 +193,7 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
               fontWeight: 700,
               fontSize: "14px",
               cursor: name.trim() ? "pointer" : "not-allowed",
-              boxShadow: name.trim() ? "0 6px 20px rgba(99, 102, 241, 0.4)" : "none",
+              boxShadow: name.trim() ? "0 4px 14px rgba(99, 102, 241, 0.4)" : "none",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",

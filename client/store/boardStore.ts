@@ -29,23 +29,36 @@ type BoardState = {
   strokeColor: string;
   fillColor: string;
   strokeWidth: number;
+  strokeStyle: "solid" | "dashed" | "dotted";
+  fillStyle: "transparent" | "semi" | "solid";
+  roughness: number;
+  roundness: boolean;
+  opacity: number;
+  deletedElementIds: Set<string>;
   selectedElementId: string | null;
   selectedElementIds: string[];
   editingElementId: string | null;
   viewport: CanvasViewport;
   remoteCursors: Record<string, StoredCursor>;
   presenceUsers: PresenceUser[];
+  currentUserId: string | null;
   followingUserId: string | null;
   laserPoints: LaserPoint[];
   theme: "dark" | "light";
   isLocked: boolean;
   setIsLocked: (isLocked: boolean) => void;
+  setCurrentUserId: (id: string | null) => void;
   setTheme: (theme: "dark" | "light") => void;
   setVersion: (version: number) => void;
   setTool: (tool: ToolType) => void;
   setStrokeColor: (color: string) => void;
   setFillColor: (color: string) => void;
   setStrokeWidth: (width: number) => void;
+  setStrokeStyle: (style: "solid" | "dashed" | "dotted") => void;
+  setFillStyle: (style: "transparent" | "semi" | "solid") => void;
+  setRoughness: (roughness: number) => void;
+  setRoundness: (roundness: boolean) => void;
+  setOpacity: (opacity: number) => void;
   setEditingElementId: (id: string | null) => void;
   setElements: (elements: WhiteboardElement[]) => void;
   commitElements: (
@@ -96,17 +109,25 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   strokeColor: "#ececf1",
   fillColor: "transparent",
   strokeWidth: 2,
+  strokeStyle: "solid",
+  fillStyle: "transparent",
+  roughness: 0,
+  roundness: false,
+  opacity: 1,
+  deletedElementIds: new Set<string>(),
   selectedElementId: null,
   selectedElementIds: [],
   editingElementId: null,
   viewport: { x: 0, y: 0, zoom: 1 },
   remoteCursors: {},
   presenceUsers: [],
+  currentUserId: null,
   followingUserId: null,
   laserPoints: [],
   theme: "dark",
   isLocked: false,
   setIsLocked: (isLocked) => set({ isLocked }),
+  setCurrentUserId: (currentUserId) => set({ currentUserId }),
   setVersion: (version) => set({ version }),
   setTheme: (theme) =>
     set((state) => {
@@ -118,10 +139,84 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
       return { theme, strokeColor: nextStroke };
     }),
-  setTool: (tool) => set({ tool }),
-  setStrokeColor: (strokeColor) => set({ strokeColor }),
-  setFillColor: (fillColor) => set({ fillColor }),
-  setStrokeWidth: (strokeWidth) => set({ strokeWidth }),
+  setTool: (tool) =>
+    set((state) => ({
+      tool,
+      selectedElementId: tool === "select" ? state.selectedElementId : null,
+      selectedElementIds: tool === "select" ? state.selectedElementIds : []
+    })),
+  setStrokeColor: (strokeColor) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeColor };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        strokeColor,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeColor } : el))
+      };
+    }),
+  setFillColor: (fillColor) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { fillColor };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        fillColor,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, fillColor } : el))
+      };
+    }),
+  setStrokeWidth: (strokeWidth) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeWidth };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        strokeWidth,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeWidth } : el))
+      };
+    }),
+  setStrokeStyle: (strokeStyle) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeStyle };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        strokeStyle,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeStyle } : el))
+      };
+    }),
+  setFillStyle: (fillStyle) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { fillStyle };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        fillStyle,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, fillStyle } : el))
+      };
+    }),
+  setRoughness: (roughness) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { roughness };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        roughness,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, roughness } : el))
+      };
+    }),
+  setRoundness: (roundness) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { roundness };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        roundness,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, roundness } : el))
+      };
+    }),
+  setOpacity: (opacity) =>
+    set((state) => {
+      if (state.selectedElementIds.length === 0 || state.tool !== "select") return { opacity };
+      const idSet = new Set(state.selectedElementIds);
+      return {
+        opacity,
+        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, opacity } : el))
+      };
+    }),
   setEditingElementId: (editingElementId) => set({ editingElementId }),
   setElements: (elements) => set({ elements }),
   commitElements: (elements, previousElements) =>
@@ -150,15 +245,17 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const activeEditId = state.editingElementId;
       const remoteMap = new Map(incomingElements.map((el) => [el.id, el]));
 
-      const nextElements = incomingElements.map((remoteEl) => {
-        if (remoteEl.id === activeEditId) {
-          const localActive = state.elements.find((e) => e.id === activeEditId);
-          return localActive || remoteEl;
-        }
-        return remoteEl;
-      });
+      const nextElements = incomingElements
+        .filter((remoteEl) => !state.deletedElementIds.has(remoteEl.id))
+        .map((remoteEl) => {
+          if (remoteEl.id === activeEditId) {
+            const localActive = state.elements.find((e) => e.id === activeEditId);
+            return localActive || remoteEl;
+          }
+          return remoteEl;
+        });
 
-      if (activeEditId && !remoteMap.has(activeEditId)) {
+      if (activeEditId && !remoteMap.has(activeEditId) && !state.deletedElementIds.has(activeEditId)) {
         const localActive = state.elements.find((e) => e.id === activeEditId);
         if (localActive) {
           nextElements.push(localActive);
@@ -193,9 +290,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set((state) => {
       if (state.selectedElementIds.length === 0) return state;
       const toDelete = new Set(state.selectedElementIds);
+      const updatedDeleted = new Set(state.deletedElementIds);
+      state.selectedElementIds.forEach((id) => updatedDeleted.add(id));
+
       nextElements = state.elements.filter((element) => !toDelete.has(element.id));
       return {
         elements: nextElements,
+        deletedElementIds: updatedDeleted,
         history: [...state.history, state.elements],
         future: [],
         selectedElementId: null,
@@ -356,9 +457,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
       if (!hoveredElement) return state;
 
+      const updatedDeleted = new Set(state.deletedElementIds);
+      updatedDeleted.add(hoveredElement.id);
+
       nextElements = state.elements.filter((element) => element.id !== hoveredElement.id);
       return {
         elements: nextElements,
+        deletedElementIds: updatedDeleted,
         history: [...state.history, state.elements],
         future: [],
         selectedElementId: null

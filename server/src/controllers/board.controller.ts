@@ -4,6 +4,7 @@ import {
   createBoard,
   getBoard,
   updateBoard,
+  deleteBoard,
   applyBoardOps,
   VersionConflictError
 } from "../services/board.service";
@@ -33,8 +34,7 @@ export async function getBoardController(request: Request, response: Response) {
     const board = await getBoard(boardId);
 
     if (!board) {
-      const created = await createBoard(boardId);
-      response.json(created);
+      response.status(404).json({ error: "Board not found." });
       return;
     }
 
@@ -49,6 +49,12 @@ export async function getBoardController(request: Request, response: Response) {
 export async function updateBoardController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
+    const role = (request.query.role as string) || (request.headers["x-board-role"] as string);
+    if (role === "viewer") {
+      response.status(403).json({ error: "Board is in view-only mode." });
+      return;
+    }
+
     const { elements, version } = request.body;
 
     if (!Array.isArray(elements)) {
@@ -146,3 +152,22 @@ export async function cleanBoardController(request: Request, response: Response)
     });
   }
 }
+
+export async function deleteBoardController(request: Request, response: Response) {
+  try {
+    const boardId = getParamId(request.params.id);
+    const role = (request.query.role as string) || (request.headers["x-board-role"] as string);
+    if (role === "viewer") {
+      response.status(403).json({ error: "Cannot delete board in view-only mode." });
+      return;
+    }
+
+    await deleteBoard(boardId);
+    response.json({ success: true, message: `Board ${boardId} deleted.` });
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to delete board."
+    });
+  }
+}
+
