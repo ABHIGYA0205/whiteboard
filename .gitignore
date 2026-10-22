@@ -17,6 +17,7 @@ dist/
 # Large binaries & media
 client/public/trailer.mp4
 *.mp4
+!client/public/board-demo.mp4
 
 # Misc
 .DS_Store
