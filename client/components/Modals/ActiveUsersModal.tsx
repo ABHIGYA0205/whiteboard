@@ -27,6 +27,7 @@ export function ActiveUsersModal({
   const currentUserId = useBoardStore((state) => state.currentUserId);
   const followingUserId = useBoardStore((state) => state.followingUserId);
   const setFollowingUserId = useBoardStore((state) => state.setFollowingUserId);
+  const remoteCursors = useBoardStore((state) => state.remoteCursors);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -60,8 +61,6 @@ export function ActiveUsersModal({
   const effectiveSelfId =
     currentUserId ||
     (typeof window !== "undefined" ? sessionStorage.getItem("whiteboard_user_id") : null);
-
-  const remoteCursors = useBoardStore((state) => state.remoteCursors);
 
   // Accurate deduplication of active participants by userId
   const userMap = new Map<string, PresenceUser>();
