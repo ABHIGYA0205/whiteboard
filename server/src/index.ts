@@ -95,7 +95,9 @@ async function start() {
   const server = http.createServer(app);
   const io = new Server(server, {
     cors: corsOptions,
-    maxHttpBufferSize: 5e6
+    maxHttpBufferSize: 5e6,
+    pingInterval: 2500, // Send ping every 2.5s for fast presence heartbeats
+    pingTimeout: 3000   // Disconnect dropped clients in 3s (was 20s+)
   });
 
   io.on("connection", (socket) => {

@@ -6,10 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const metadata: Metadata = {
-  title: "Whiteboard — Infinite Collaborative Canvas",
-  description: "Collaborative whiteboard with live drawing, smart templates, and AI sketch enhancement.",
+  title: "CanvasFlow — Real-Time Infinite Whiteboard",
+  description: "Ultra-fast infinite collaborative whiteboard with live multi-user drawing, AI diagrams, and vector studio tools.",
   icons: {
-    icon: "/icon.svg"
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" }
+    ],
+    shortcut: "/icon.svg",
+    apple: "/icon.svg"
   }
 };
 

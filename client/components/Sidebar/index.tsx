@@ -21,6 +21,7 @@ import {
   Trash2
 } from "lucide-react";
 import { useBoardStore } from "@/store/boardStore";
+import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import { exportToSvg, exportSelectionToImage } from "@/components/Canvas/drawingUtils";
 
 type SidebarProps = {
@@ -235,9 +236,12 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
               marginBottom: "6px"
             }}
           >
-            <div>
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "Whiteboard"}</div>
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <CanvasFlowLogo size={24} />
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "CanvasFlow"}</div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
+              </div>
             </div>
             {saveStatus && (
               <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: "var(--muted)" }}>

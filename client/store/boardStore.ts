@@ -575,7 +575,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const nextCursors: Record<string, StoredCursor> = {};
       let changed = false;
       for (const [id, cursor] of Object.entries(state.remoteCursors)) {
-        if (now - cursor.lastSeen <= 15000) {
+        if (now - cursor.lastSeen <= 4000) {
           nextCursors[id] = cursor;
         } else {
           changed = true;
@@ -583,7 +583,23 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
       return changed ? { remoteCursors: nextCursors } : state;
     }),
-  setPresenceUsers: (presenceUsers) => set({ presenceUsers }),
+  setPresenceUsers: (presenceUsers) =>
+    set((state) => {
+      // Synchronize presence and immediately prune any remoteCursors for users who left
+      const activeIds = new Set(presenceUsers.map((u) => u.userId));
+      if (state.currentUserId) activeIds.add(state.currentUserId);
+      const nextCursors: Record<string, StoredCursor> = {};
+      for (const [id, cursor] of Object.entries(state.remoteCursors)) {
+        if (activeIds.has(id)) {
+          nextCursors[id] = cursor;
+        }
+      }
+      return {
+        presenceUsers,
+        remoteCursors: nextCursors,
+        followingUserId: state.followingUserId && !activeIds.has(state.followingUserId) ? null : state.followingUserId
+      };
+    }),
   addPresenceUser: (user) =>
     set((state) => ({
       presenceUsers: [
@@ -592,10 +608,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       ]
     })),
   removePresenceUser: (userId) =>
-    set((state) => ({
-      presenceUsers: state.presenceUsers.filter((u) => u.userId !== userId),
-      followingUserId: state.followingUserId === userId ? null : state.followingUserId
-    })),
+    set((state) => {
+      const nextCursors = { ...state.remoteCursors };
+      delete nextCursors[userId];
+      return {
+        presenceUsers: state.presenceUsers.filter((u) => u.userId !== userId),
+        remoteCursors: nextCursors,
+        followingUserId: state.followingUserId === userId ? null : state.followingUserId
+      };
+    }),
   setFollowingUserId: (followingUserId) => set({ followingUserId }),
   // F2.5: Laser pointer points
   addLaserPoint: (point, color = "#ff0055") =>

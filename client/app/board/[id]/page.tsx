@@ -17,6 +17,7 @@ import { AiDiagramModal } from "@/components/Modals/AiDiagramModal";
 import { UserNameModal } from "@/components/Modals/UserNameModal";
 import { ActiveUsersModal } from "@/components/Modals/ActiveUsersModal";
 import { Minimap } from "@/components/Canvas/Minimap";
+import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import {
   Undo2,
   Redo2,
@@ -94,6 +95,12 @@ export default function BoardPage({ params }: BoardPageProps) {
       } catch {}
     }
   };
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = `${boardTitle || "Untitled Board"} — CanvasFlow`;
+    }
+  }, [boardTitle]);
 
   useEffect(() => {
     const stored =
@@ -174,6 +181,9 @@ export default function BoardPage({ params }: BoardPageProps) {
             (typeof window !== "undefined" ? localStorage.getItem(`whiteboard_title_${boardId}`) : "") ||
             "Untitled Board";
           setBoardTitle(savedTitle);
+          if (typeof document !== "undefined") {
+            document.title = `${savedTitle} — CanvasFlow`;
+          }
           try {
             const stored = localStorage.getItem("whiteboard_recent_boards");
             let boards = stored ? JSON.parse(stored) : [];
@@ -368,7 +378,8 @@ export default function BoardPage({ params }: BoardPageProps) {
           onDeleteBoard={handleDeleteBoard}
           onShowShortcuts={() => setIsShortcutsOpen(true)}
         />
-        <div style={{ display: "flex", alignItems: "center", marginLeft: "2px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "2px" }}>
+          <CanvasFlowLogo size={20} style={{ opacity: 0.9 }} />
           <input
             value={boardTitle}
             onChange={(e) => handleTitleChange(e.target.value)}
@@ -498,7 +509,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           const now = Date.now();
           for (const cursor of Object.values(remoteCursors)) {
             if (cursor && cursor.userId && !userMap.has(cursor.userId)) {
-              if (now - (cursor.lastSeen || 0) < 60000) {
+              if (now - (cursor.lastSeen || 0) < 3500) {
                 const isSelf = Boolean(effectiveSelfId) && cursor.userId === effectiveSelfId;
                 userMap.set(cursor.userId, {
                   userId: cursor.userId,

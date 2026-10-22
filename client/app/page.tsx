@@ -1,6 +1,7 @@
 "use client";
 
 import { createBoard } from "@/lib/api";
+import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, useEffect, useRef } from "react";
 import {
@@ -171,22 +172,10 @@ export default function HomePage() {
               letterSpacing: "-0.02em"
             }}
           >
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                borderRadius: "8px",
-                background: "#1e1e2e",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#818cf8"
-              }}
-            >
-              <PenTool size={16} />
-            </div>
-            <span>Whiteboard</span>
+            <CanvasFlowLogo size={32} />
+            <span style={{ background: "linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+              CanvasFlow
+            </span>
           </div>
 
           {/* Status Indicator (Clean & Professional) */}
@@ -629,7 +618,7 @@ export default function HomePage() {
             <span>Zero install required • Works in all modern browsers</span>
           </div>
           <p style={{ margin: "4px 0 0" }}>
-            © {new Date().getFullYear()} Whiteboard. Professional infinite canvas for high-performance teams.
+            © {new Date().getFullYear()} CanvasFlow. Professional infinite canvas for high-performance teams.
           </p>
         </footer>
       </div>

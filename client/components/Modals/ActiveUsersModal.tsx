@@ -80,7 +80,7 @@ export function ActiveUsersModal({
   const now = Date.now();
   for (const cursor of Object.values(remoteCursors)) {
     if (cursor && cursor.userId && !userMap.has(cursor.userId)) {
-      if (now - (cursor.lastSeen || 0) < 60000) {
+      if (now - (cursor.lastSeen || 0) < 3500) {
         const isSelf = Boolean(effectiveSelfId) && cursor.userId === effectiveSelfId;
         userMap.set(cursor.userId, {
           userId: cursor.userId,

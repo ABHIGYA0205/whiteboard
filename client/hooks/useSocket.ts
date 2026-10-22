@@ -223,18 +223,33 @@ export function useSocket(boardId: string) {
       cleanupSocket = cleanup;
     });
 
-    // Cleanup stale remote cursors periodically (A3.2) and sync presence heartbeat
+    // Fast presence sync heartbeat and stale cursor cleanup (every 2.5s)
     const cleanupInterval = window.setInterval(() => {
       cleanStaleCursors();
       if (socketRef.current?.connected && boardId) {
         socketRef.current.emit("request-presence", { boardId });
       }
-    }, 4000);
+    }, 2500);
+
+    // Immediate cleanup when tab or browser window is closed or navigated away from
+    const handleBeforeUnload = () => {
+      if (socketRef.current?.connected && boardId) {
+        try {
+          socketRef.current.emit("leave-board", { boardId });
+          socketRef.current.disconnect();
+        } catch {}
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handleBeforeUnload);
 
     return () => {
       isMounted = false;
       cleanupSocket?.();
       window.clearInterval(cleanupInterval);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("pagehide", handleBeforeUnload);
       if (trailingTimerRef.current !== null) {
         window.clearTimeout(trailingTimerRef.current);
       }
