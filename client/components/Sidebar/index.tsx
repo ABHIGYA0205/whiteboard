@@ -239,7 +239,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <CanvasFlowLogo size={24} />
               <div>
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "CanvasFlow"}</div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "Canvas Flow"}</div>
                 <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
               </div>
             </div>

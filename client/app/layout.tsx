@@ -6,14 +6,16 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const metadata: Metadata = {
-  title: "CanvasFlow — Real-Time Infinite Whiteboard",
+  title: "Canvas Flow",
   description: "Ultra-fast infinite collaborative whiteboard with live multi-user drawing, AI diagrams, and vector studio tools.",
   icons: {
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml" }
+      { url: "/favicon.ico?v=cf3", sizes: "any" },
+      { url: "/icon.png?v=cf3", type: "image/png", sizes: "64x64" },
+      { url: "/icon.svg?v=cf3", type: "image/svg+xml" }
     ],
-    shortcut: "/icon.svg",
-    apple: "/icon.svg"
+    shortcut: "/favicon.ico?v=cf3",
+    apple: "/icon.png?v=cf3"
   }
 };
 
@@ -63,6 +65,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
           rel="stylesheet"
         />
+        <link rel="icon" href="/favicon.ico?v=cf3" sizes="any" />
+        <link rel="icon" href="/icon.png?v=cf3" type="image/png" sizes="64x64" />
+        <link rel="icon" href="/icon.svg?v=cf3" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/icon.png?v=cf3" />
         {inlineStyles ? (
           <style
             id="whiteboard-core-styles"

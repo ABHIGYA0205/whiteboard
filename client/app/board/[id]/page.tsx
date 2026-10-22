@@ -98,7 +98,7 @@ export default function BoardPage({ params }: BoardPageProps) {
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title = `${boardTitle || "Untitled Board"} — CanvasFlow`;
+      document.title = boardTitle && boardTitle !== "Untitled Board" ? `${boardTitle} — Canvas Flow` : "Canvas Flow";
     }
   }, [boardTitle]);
 
@@ -182,7 +182,7 @@ export default function BoardPage({ params }: BoardPageProps) {
             "Untitled Board";
           setBoardTitle(savedTitle);
           if (typeof document !== "undefined") {
-            document.title = `${savedTitle} — CanvasFlow`;
+            document.title = savedTitle && savedTitle !== "Untitled Board" ? `${savedTitle} — Canvas Flow` : "Canvas Flow";
           }
           try {
             const stored = localStorage.getItem("whiteboard_recent_boards");

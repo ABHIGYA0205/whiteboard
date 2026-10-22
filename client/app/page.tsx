@@ -174,7 +174,7 @@ export default function HomePage() {
           >
             <CanvasFlowLogo size={32} />
             <span style={{ background: "linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-              CanvasFlow
+              Canvas Flow
             </span>
           </div>
 
