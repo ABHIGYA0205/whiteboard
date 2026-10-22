@@ -113,14 +113,16 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowStyleMenu(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside, { passive: true });
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
     };
   }, []);
 
@@ -148,6 +150,8 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
   const selectElement = useBoardStore((state) => state.selectElement);
   const isLocked = useBoardStore((state) => state.isLocked);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
+  const isPropertiesOpen = useBoardStore((state) => state.isPropertiesOpen);
+  const togglePropertiesOpen = useBoardStore((state) => state.togglePropertiesOpen);
   const clearBoard = useBoardStore((state) => state.clearBoard);
   const viewport = useBoardStore((state) => state.viewport);
 
@@ -423,6 +427,29 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
             <span className="tool-shortcut">{option.shortcut}</span>
           </button>
         ))}
+
+        {/* Integrated Style & Color Properties Button */}
+        <button
+          className={`tool-button ${isPropertiesOpen ? "active" : ""}`}
+          onClick={() => togglePropertiesOpen()}
+          title="Stroke & Fill Color Properties"
+          aria-label="Toggle stroke and fill properties"
+          style={{ position: "relative" }}
+        >
+          <Palette size={16} />
+          <span
+            style={{
+              position: "absolute",
+              bottom: "4px",
+              right: "4px",
+              width: "7px",
+              height: "7px",
+              borderRadius: "50%",
+              backgroundColor: strokeColor === "transparent" ? "#94a3b8" : strokeColor,
+              border: "1.5px solid #181824"
+            }}
+          />
+        </button>
 
         <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
 

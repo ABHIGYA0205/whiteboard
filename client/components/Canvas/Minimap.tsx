@@ -322,6 +322,7 @@ export function Minimap() {
 
   return (
     <div
+      className="minimap-wrapper"
       style={{
         position: "fixed",
         bottom: "16px",

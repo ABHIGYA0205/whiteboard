@@ -317,7 +317,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         padding: 0
       }}
     >
-      {/* Top-Left: Minimal hamburger menu matching Excalidraw */}
+      {/* Top-Left: Minimal hamburger menu + mobile undo/redo */}
       <div className="top-left-nav">
         <Sidebar
           boardId={boardId}
@@ -327,6 +327,40 @@ export default function BoardPage({ params }: BoardPageProps) {
           onDeleteBoard={handleDeleteBoard}
           onShowShortcuts={() => setIsShortcutsOpen(true)}
         />
+        <div className="mobile-header-actions">
+          <button
+            className="mobile-header-btn"
+            onClick={handleUndo}
+            disabled={!canUndo}
+            style={{ opacity: canUndo ? 1 : 0.35 }}
+            title="Undo"
+            aria-label="Undo"
+          >
+            <Undo2 size={16} />
+          </button>
+          <button
+            className="mobile-header-btn"
+            onClick={handleRedo}
+            disabled={!canRedo}
+            style={{ opacity: canRedo ? 1 : 0.35 }}
+            title="Redo"
+            aria-label="Redo"
+          >
+            <Redo2 size={16} />
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile Center: Quick Zoom indicator & 100% reset */}
+      <div className="mobile-center-nav">
+        <button
+          className="mobile-zoom-pill"
+          onClick={() => resetViewport()}
+          title="Reset zoom to 100%"
+          aria-label="Reset zoom"
+        >
+          {Math.round(viewport.zoom * 100)}%
+        </button>
       </div>
 
       {/* Center Tool Area: Hidden/Read-Only in Viewer Mode */}
@@ -434,7 +468,7 @@ export default function BoardPage({ params }: BoardPageProps) {
                     boxShadow: "0 0 8px #10b981"
                   }}
                 />
-                <span>{effectivePresenceUsers.length} online</span>
+                <span className="presence-count-text">{effectivePresenceUsers.length} online</span>
               </div>
             </div>
           );
@@ -445,6 +479,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           onClick={() => setIsShareOpen(true)}
           title="Share Board"
           aria-label="Share Board Link"
+          className="share-header-button"
           style={{
             display: "flex",
             alignItems: "center",
@@ -461,7 +496,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           }}
         >
           <Share2 size={13} />
-          <span>Share</span>
+          <span className="share-btn-text">Share</span>
         </button>
       </div>
 

@@ -77,7 +77,14 @@ type InteractionState =
       current: Point;
     }
   | { mode: "erasing"; previousElements: WhiteboardElement[] }
-  | { mode: "panning"; origin: Point; viewportOrigin: Point };
+  | { mode: "panning"; origin: Point; viewportOrigin: Point }
+  | {
+      mode: "pinch-pan";
+      initialDistance: number;
+      initialZoom: number;
+      initialCenter: Point;
+      viewportOrigin: Point;
+    };
 
 const GRID_SIZE = 48;
 const ZOOM_IN_FACTOR = 1.035;
@@ -155,9 +162,7 @@ export function useCanvas({
   }, [canvasRef, containerRef]);
 
   const theme = useBoardStore((state) => state.theme);
-  const activeTouchesRef = useRef<Map<number, Point>>(new Map());
-  const pinchStartDistRef = useRef<number | null>(null);
-  const pinchStartZoomRef = useRef<number | null>(null);
+  const activePointersRef = useRef<Map<number, Point>>(new Map());
 
   useEffect(() => {
     render();
@@ -269,7 +274,38 @@ export function useCanvas({
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+
+    activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    // Multi-touch detection (2 or more touches -> pinch zoom and two-finger pan)
+    if (activePointersRef.current.size >= 2) {
+      // If we were drawing a draft stroke with the first touch, cancel and discard it!
+      if (interactionRef.current.mode === "drawing") {
+        const prev = interactionRef.current.previousElements;
+        setElements(prev);
+        elementsRef.current = prev;
+      }
+
+      const pts = Array.from(activePointersRef.current.values());
+      const p1 = pts[0];
+      const p2 = pts[1];
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      const currentViewport = viewportRef.current;
+
+      interactionRef.current = {
+        mode: "pinch-pan",
+        initialDistance: Math.max(dist, 1),
+        initialZoom: currentViewport.zoom,
+        initialCenter: center,
+        viewportOrigin: { x: currentViewport.x, y: currentViewport.y }
+      };
+      return;
+    }
+
     const point = getCanvasPoint(event);
     const currentElements = elementsRef.current;
     const currentViewport = viewportRef.current;
@@ -496,6 +532,37 @@ export function useCanvas({
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (activePointersRef.current.has(event.pointerId)) {
+      activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    if (interactionRef.current.mode === "pinch-pan") {
+      if (activePointersRef.current.size >= 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        const p1 = pts[0];
+        const p2 = pts[1];
+        const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const currentCenter = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const pinch = interactionRef.current;
+
+        const scale = currentDist / pinch.initialDistance;
+        const newZoom = Math.min(Math.max(pinch.initialZoom * scale, 0.1), 5);
+
+        const worldX = (pinch.initialCenter.x - pinch.viewportOrigin.x) / pinch.initialZoom;
+        const worldY = (pinch.initialCenter.y - pinch.viewportOrigin.y) / pinch.initialZoom;
+
+        const newViewportX = currentCenter.x - worldX * newZoom;
+        const newViewportY = currentCenter.y - worldY * newZoom;
+
+        setViewport({
+          x: newViewportX,
+          y: newViewportY,
+          zoom: newZoom
+        });
+      }
+      return;
+    }
+
     const point = getCanvasPoint(event);
     const currentElements = elementsRef.current;
     const currentViewport = viewportRef.current;
@@ -665,12 +732,23 @@ export function useCanvas({
   };
 
   const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event?.pointerId !== undefined) {
+      activePointersRef.current.delete(event.pointerId);
+    }
+
     if (event?.currentTarget && event.pointerId !== undefined) {
       try {
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
           event.currentTarget.releasePointerCapture(event.pointerId);
         }
       } catch {}
+    }
+
+    if (interactionRef.current.mode === "pinch-pan") {
+      if (activePointersRef.current.size < 2) {
+        interactionRef.current = { mode: "idle" };
+      }
+      return;
     }
 
     if (interactionRef.current.mode === "drawing") {

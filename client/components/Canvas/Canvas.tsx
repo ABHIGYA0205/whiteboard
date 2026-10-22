@@ -211,6 +211,7 @@ export function Canvas({ collaboration }: CanvasProps) {
         onPointerDown={canvas.handlePointerDown}
         onPointerMove={canvas.handlePointerMove}
         onPointerUp={canvas.handlePointerUp}
+        onPointerCancel={canvas.handlePointerUp}
         onPointerLeave={canvas.handlePointerUp}
         onDoubleClick={handleDoubleClick}
         onWheel={canvas.handleWheel}

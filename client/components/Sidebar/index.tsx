@@ -58,9 +58,9 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  // Close menu on click outside on the board
+  // Close menu on click/touch outside on the board
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       if (
         isOpen &&
         panelRef.current &&
@@ -71,7 +71,11 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
   }, [isOpen]);
 
   // A6.5: Close menu on Escape key

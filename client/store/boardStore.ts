@@ -46,6 +46,9 @@ type BoardState = {
   laserPoints: LaserPoint[];
   theme: "dark" | "light";
   isLocked: boolean;
+  isPropertiesOpen: boolean;
+  setIsPropertiesOpen: (isOpen: boolean) => void;
+  togglePropertiesOpen: () => void;
   setIsLocked: (isLocked: boolean) => void;
   setCurrentUserId: (id: string | null) => void;
   setTheme: (theme: "dark" | "light") => void;
@@ -126,6 +129,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   laserPoints: [],
   theme: "dark",
   isLocked: false,
+  isPropertiesOpen: typeof window !== "undefined" ? window.innerWidth >= 768 : true,
+  setIsPropertiesOpen: (isPropertiesOpen) => set({ isPropertiesOpen }),
+  togglePropertiesOpen: () => set((state) => ({ isPropertiesOpen: !state.isPropertiesOpen })),
   setIsLocked: (isLocked) => set({ isLocked }),
   setCurrentUserId: (currentUserId) => set({ currentUserId }),
   setVersion: (version) => set({ version }),

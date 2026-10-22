@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import { useBoardStore } from "@/store/boardStore";
 import type { WhiteboardElement } from "@shared/types";
 import {
@@ -10,7 +11,9 @@ import {
   ChevronUp,
   ChevronsUp,
   Square,
-  Sparkles
+  Sparkles,
+  Palette,
+  X
 } from "lucide-react";
 
 type PropertiesPanelProps = {
@@ -65,7 +68,14 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
     "sticky"
   ].includes(tool);
 
+  const isPropertiesOpen = useBoardStore((state) => state.isPropertiesOpen);
+  const setIsPropertiesOpen = useBoardStore((state) => state.setIsPropertiesOpen);
+
   if (!hasSelection && !isDrawingTool) {
+    return null;
+  }
+
+  if (!isPropertiesOpen) {
     return null;
   }
 
@@ -137,32 +147,53 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
   const activeBtnBorder = isLight ? "#6366f1" : "#818cf8";
 
   return (
-    <aside
-      className="excalidraw-properties-panel"
-      aria-label="Element Properties"
-      style={{
-        position: "fixed",
-        left: "14px",
-        top: "60px",
-        width: "216px",
-        maxHeight: "calc(100vh - 120px)",
-        overflowY: "auto",
-        background: panelBg,
-        border: `1px solid ${borderColor}`,
-        borderRadius: "14px",
-        padding: "14px",
-        boxShadow: isLight
-          ? "0 10px 30px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0,0,0,0.04)"
-          : "0 16px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04)",
-        zIndex: 90,
-        display: "flex",
-        flexDirection: "column",
-        gap: "14px",
-        fontFamily: "'Inter', sans-serif",
-        color: textColor,
-        userSelect: "none"
-      }}
-    >
+    <>
+      <div
+        className="properties-mobile-backdrop"
+        onClick={() => setIsPropertiesOpen(false)}
+      />
+      <aside
+        className="excalidraw-properties-panel"
+        aria-label="Element Properties"
+        style={{
+          background: panelBg,
+          borderColor: borderColor,
+          color: textColor
+        }}
+      >
+        {/* Header with Title and Close button */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingBottom: "8px",
+            borderBottom: `1px solid ${borderColor}`,
+            marginBottom: "4px"
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 700, color: textColor }}>
+            <Palette size={14} color="#818cf8" />
+            <span>Properties & Style</span>
+          </div>
+          <button
+            onClick={() => setIsPropertiesOpen(false)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: subTextColor,
+              cursor: "pointer",
+              padding: "4px",
+              borderRadius: "6px",
+              display: "flex",
+              alignItems: "center"
+            }}
+            title="Close Properties"
+            aria-label="Close Properties"
+          >
+            <X size={15} />
+          </button>
+        </div>
       {/* 1. STROKE COLOR */}
       <div>
         <div style={{ fontSize: "11px", fontWeight: 700, color: subTextColor, marginBottom: "6px" }}>
@@ -667,5 +698,6 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
         </div>
       )}
     </aside>
-  );
+  </>
+);
 }
