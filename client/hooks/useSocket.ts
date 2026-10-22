@@ -113,6 +113,13 @@ export function useSocket(boardId: string) {
 
       const handleCursor = ({ cursor }: { cursor: CursorPosition }) => {
         upsertRemoteCursor(cursor);
+        if (cursor?.userId) {
+          addPresenceUser({
+            userId: cursor.userId,
+            name: cursor.name || `User-${cursor.userId.slice(0, 4)}`,
+            color: cursor.color || "#3b82f6"
+          });
+        }
       };
 
       const handleCursorLeave = ({ userId }: { userId: string }) => {
@@ -216,9 +223,12 @@ export function useSocket(boardId: string) {
       cleanupSocket = cleanup;
     });
 
-    // Cleanup stale remote cursors periodically (A3.2)
+    // Cleanup stale remote cursors periodically (A3.2) and sync presence heartbeat
     const cleanupInterval = window.setInterval(() => {
       cleanStaleCursors();
+      if (socketRef.current?.connected && boardId) {
+        socketRef.current.emit("request-presence", { boardId });
+      }
     }, 4000);
 
     return () => {

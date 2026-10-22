@@ -117,7 +117,25 @@ export function registerBoardSocket(io: Server, socket: Socket) {
     }
   });
 
+  socket.on("request-presence", ({ boardId }: { boardId: string }) => {
+    if (!boardId) return;
+    const boardPresence = roomUsers.get(boardId);
+    if (boardPresence) {
+      socket.emit("presence:state", {
+        boardId,
+        users: Array.from(boardPresence.values())
+      });
+    }
+  });
+
   socket.on("request-state", async ({ boardId }: { boardId: string }) => {
+    const boardPresence = roomUsers.get(boardId);
+    if (boardPresence) {
+      socket.emit("presence:state", {
+        boardId,
+        users: Array.from(boardPresence.values())
+      });
+    }
     try {
       const board = await getBoard(boardId);
       if (board) {
@@ -146,8 +164,16 @@ export function registerBoardSocket(io: Server, socket: Socket) {
         });
       }
     }
-    socket.to(boardId).emit("presence:leave", { boardId, userId });
-    socket.to(boardId).emit("cursor-leave", { boardId, userId });
+
+    // Only broadcast presence:leave if there are NO remaining sockets for this userId in the room
+    const hasRemainingSocketForUser = boardPresence
+      ? Array.from(boardPresence.values()).some((u) => u.userId === userId)
+      : false;
+
+    if (!hasRemainingSocketForUser) {
+      socket.to(boardId).emit("presence:leave", { boardId, userId });
+      socket.to(boardId).emit("cursor-leave", { boardId, userId });
+    }
   }
 
   socket.on("leave-board", ({ boardId }: { boardId: string }) => {
