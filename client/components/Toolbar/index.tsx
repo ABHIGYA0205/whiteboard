@@ -2,7 +2,7 @@
 
 import { TOOL_OPTIONS } from "@/components/Canvas/tools";
 import { exportSelectionToImage, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
-import { enhanceSketch, uploadImage } from "@/lib/api";
+import { enhanceSketch, uploadImage, resolveImageUrl } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 import { useState, useEffect, useRef } from "react";
 import type { WhiteboardElement } from "@shared/types";
@@ -170,8 +170,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
         try {
           const uploadRes = await uploadImage(dataUrl);
           if (uploadRes?.url) {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
-            finalUrl = uploadRes.url.startsWith("http") ? uploadRes.url : `${apiBase}${uploadRes.url}`;
+            finalUrl = resolveImageUrl(uploadRes.url);
           }
         } catch {
           // Fall back to direct data URL if server upload endpoint is unavailable
@@ -345,6 +344,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
     const originY = modalBounds ? modalBounds.y : -viewport.y / viewport.zoom + 160;
     const finalWidth = modalBounds ? modalBounds.width : width;
     const finalHeight = modalBounds ? modalBounds.height : height;
+    const finalImageUrl = resolveImageUrl(imageUrl);
 
     const imgEl: WhiteboardElement = {
       id: crypto.randomUUID(),
@@ -355,7 +355,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
       height: finalHeight,
       strokeColor: "#ffffff",
       strokeWidth: 1,
-      imageUrl,
+      imageUrl: finalImageUrl,
       points: []
     };
 
@@ -432,8 +432,9 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
         <button
           className={`tool-button ${isPropertiesOpen ? "active" : ""}`}
           onClick={() => togglePropertiesOpen()}
-          title="Stroke & Fill Color Properties"
+          title="Style & Properties (S)"
           aria-label="Toggle stroke and fill properties"
+          aria-expanded={isPropertiesOpen}
           style={{ position: "relative" }}
         >
           <Palette size={16} />

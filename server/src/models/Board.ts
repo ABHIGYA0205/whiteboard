@@ -13,7 +13,7 @@ const elementSchema = new Schema(
     id: { type: String, required: true },
     type: {
       type: String,
-      enum: ["pencil", "rectangle", "diamond", "circle", "line", "arrow", "text", "image", "sticky"],
+      enum: ["pencil", "rectangle", "diamond", "circle", "ellipse", "line", "arrow", "text", "image", "sticky"],
       required: true
     },
     x: { type: Number, required: true },
@@ -22,11 +22,11 @@ const elementSchema = new Schema(
     height: { type: Number, required: true },
     strokeColor: { type: String, required: true },
     strokeWidth: { type: Number, required: true },
-    strokeStyle: { type: String, enum: ["solid", "dashed", "dotted"], default: "solid" },
+    strokeStyle: { type: String, default: "solid" },
     fillColor: { type: String, default: "transparent" },
-    fillStyle: { type: String, enum: ["transparent", "semi", "solid"], default: "transparent" },
+    fillStyle: { type: String, default: "transparent" },
     roughness: { type: Number, default: 0 },
-    roundness: { type: Boolean, default: false },
+    roundness: { type: Schema.Types.Mixed, default: false },
     text: { type: String, default: "" },
     fontSize: { type: Number, default: 24 },
     imageUrl: { type: String, default: "" },
@@ -43,13 +43,15 @@ const boardSchema = new Schema(
   {
     id: { type: String, required: true, unique: true, index: true },
     version: { type: Number, default: 0, required: true },
+    title: { type: String, default: "Untitled Board" },
     ownerId: { type: String },
     shareToken: { type: String },
+    backgroundColor: { type: String, default: "" },
     elements: { type: [elementSchema], default: [] }
   },
   {
     timestamps: true,
-    strict: "throw"
+    strict: false
   }
 );
 

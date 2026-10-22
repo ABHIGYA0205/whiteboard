@@ -3,6 +3,7 @@ import type {
   Point,
   WhiteboardElement
 } from "@shared/types";
+import { resolveImageUrl } from "@/lib/api";
 
 const HANDLE_SIZE = 12;
 
@@ -27,6 +28,21 @@ export function getNormalizedBounds(element: WhiteboardElement) {
     const maxLineLen = lines.reduce((max, l) => Math.max(max, l.length), 0);
     width = Math.max(width, maxLineLen * (fontSize * 0.62), 60);
     height = Math.max(height, lines.length * (fontSize * 1.25), fontSize);
+  }
+
+  if (element.type === "sticky" && element.text) {
+    const fontSize = element.fontSize || 18;
+    const padding = 16;
+    const maxWidth = Math.max(width - padding * 2, 80);
+    const lineHeight = fontSize * 1.35;
+    const paragraphs = element.text.split("\n");
+    let totalLines = 0;
+    for (const para of paragraphs) {
+      const charPerLine = Math.max(Math.floor(maxWidth / (fontSize * 0.55)), 1);
+      totalLines += Math.max(Math.ceil((para.length || 1) / charPerLine), 1);
+    }
+    const neededHeight = padding * 2 + totalLines * lineHeight + 16;
+    height = Math.max(height, neededHeight);
   }
 
   return { x, y, width, height };
@@ -215,7 +231,7 @@ export function drawElement(
     }
   }
 
-  if (element.type === "circle") {
+  if (element.type === "circle" || element.type === "ellipse") {
     context.beginPath();
     context.ellipse(
       bounds.x + bounds.width / 2,
@@ -323,25 +339,8 @@ export function drawElement(
     }
   }
 
-  if (element.type === "image" && element.imageUrl) {
-    const cached = imageCache.get(element.imageUrl);
-    if (cached && cached.complete && cached.naturalWidth > 0 && cached.naturalHeight > 0) {
-      try {
-        context.drawImage(cached, bounds.x, bounds.y, bounds.width, bounds.height);
-      } catch {
-        // Fallback gracefully if image enters broken state during rendering
-        context.save();
-        context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-        context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-        context.strokeStyle = "rgba(239, 68, 68, 0.4)";
-        context.lineWidth = 1.5;
-        context.setLineDash([4, 4]);
-        context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-        context.setLineDash([]);
-        context.restore();
-      }
-    } else if (cached && cached.complete && (cached.naturalWidth === 0 || cached.naturalHeight === 0)) {
-      // Image failed to load or is in broken state
+  if (element.type === "image") {
+    if (!element.imageUrl) {
       context.save();
       context.fillStyle = theme === "light" ? "rgba(239, 68, 68, 0.05)" : "rgba(239, 68, 68, 0.1)";
       context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
@@ -356,35 +355,83 @@ export function drawElement(
       context.textBaseline = "middle";
       context.fillText("Image unavailable", bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       context.restore();
-    } else if (!cached) {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = element.imageUrl;
-      imageCache.set(element.imageUrl, img);
-      img.onload = () => {
-        window.dispatchEvent(new CustomEvent("image-loaded"));
-      };
-      img.onerror = () => {
-        window.dispatchEvent(new CustomEvent("image-loaded"));
-      };
-
-      // Loading skeleton
-      context.save();
-      context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-      context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-      context.strokeStyle = theme === "light" ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
-      context.lineWidth = 1;
-      context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-      context.restore();
     } else {
-      // Still loading
-      context.save();
-      context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-      context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-      context.strokeStyle = theme === "light" ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
-      context.lineWidth = 1;
-      context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-      context.restore();
+      const resolvedUrl = resolveImageUrl(element.imageUrl);
+      const cached = imageCache.get(resolvedUrl);
+      if (cached && cached.complete && cached.naturalWidth > 0 && cached.naturalHeight > 0) {
+        try {
+          context.drawImage(cached, bounds.x, bounds.y, bounds.width, bounds.height);
+        } catch {
+          // Fallback gracefully if image enters broken state during rendering
+          context.save();
+          context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
+          context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+          context.strokeStyle = "rgba(239, 68, 68, 0.4)";
+          context.lineWidth = 1.5;
+          context.setLineDash([4, 4]);
+          context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+          context.setLineDash([]);
+          context.restore();
+        }
+      } else if (cached && cached.complete && (cached.naturalWidth === 0 || cached.naturalHeight === 0)) {
+        // Image failed to load or is in broken state
+        context.save();
+        context.fillStyle = theme === "light" ? "rgba(239, 68, 68, 0.05)" : "rgba(239, 68, 68, 0.1)";
+        context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.strokeStyle = "rgba(239, 68, 68, 0.35)";
+        context.lineWidth = 1.5;
+        context.setLineDash([4, 4]);
+        context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.setLineDash([]);
+        context.fillStyle = theme === "light" ? "#dc2626" : "#fca5a5";
+        context.font = "12px sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText("Image unavailable", bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        context.restore();
+      } else if (!cached) {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = resolvedUrl;
+        imageCache.set(resolvedUrl, img);
+        img.onload = () => {
+          window.dispatchEvent(new CustomEvent("image-loaded"));
+        };
+        img.onerror = () => {
+          // Retry once without crossOrigin in case CORS headers are absent
+          if (img.crossOrigin) {
+            const retryImg = new Image();
+            retryImg.src = resolvedUrl;
+            imageCache.set(resolvedUrl, retryImg);
+            retryImg.onload = () => {
+              window.dispatchEvent(new CustomEvent("image-loaded"));
+            };
+            retryImg.onerror = () => {
+              window.dispatchEvent(new CustomEvent("image-loaded"));
+            };
+            return;
+          }
+          window.dispatchEvent(new CustomEvent("image-loaded"));
+        };
+
+        // Loading skeleton
+        context.save();
+        context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
+        context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.strokeStyle = theme === "light" ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
+        context.lineWidth = 1;
+        context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.restore();
+      } else {
+        // Still loading
+        context.save();
+        context.fillStyle = theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
+        context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.strokeStyle = theme === "light" ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
+        context.lineWidth = 1;
+        context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.restore();
+      }
     }
   }
 
@@ -769,7 +816,7 @@ export function exportToSvg(
         });
       }
       svgParts.push(`  </g>`);
-    } else if (el.type === "circle") {
+    } else if (el.type === "circle" || el.type === "ellipse") {
       svgParts.push(`  <ellipse cx="${b.x + b.width / 2}" cy="${b.y + b.height / 2}" rx="${b.width / 2}" ry="${b.height / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" />`);
     } else if (el.type === "line" || el.type === "arrow") {
       svgParts.push(`  <line x1="${el.x}" y1="${el.y}" x2="${el.x + el.width}" y2="${el.y + el.height}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" />`);
@@ -782,7 +829,8 @@ export function exportToSvg(
         svgParts.push(`  <text x="${b.x}" y="${b.y + 20 + i * (el.fontSize || 24) * 1.2}" fill="${stroke}" font-family="sans-serif" font-size="${el.fontSize || 24}">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`);
       });
     } else if (el.type === "image" && el.imageUrl) {
-      svgParts.push(`  <image href="${el.imageUrl}" x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" />`);
+      const resolvedUrl = resolveImageUrl(el.imageUrl);
+      svgParts.push(`  <image href="${resolvedUrl}" x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" />`);
     }
   }
 

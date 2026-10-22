@@ -16,7 +16,7 @@ import {
   Layers,
   ArrowRight
 } from "lucide-react";
-import { uploadImage, enhanceSketch } from "@/lib/api";
+import { uploadImage, enhanceSketch, resolveImageUrl } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 
 type AiImageModalProps = {
@@ -231,8 +231,7 @@ export function AiImageModal({
               try {
                 const uploadRes = await uploadImage(dataUrl);
                 if (uploadRes?.url) {
-                  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
-                  finalUrl = uploadRes.url.startsWith("http") ? uploadRes.url : `${apiBase}${uploadRes.url}`;
+                  finalUrl = resolveImageUrl(uploadRes.url);
                   break;
                 }
               } catch {
@@ -258,7 +257,7 @@ export function AiImageModal({
             setProgress(Math.max(60, p));
           });
           if (serverRes?.imageUrl) {
-            finalUrl = serverRes.imageUrl;
+            finalUrl = resolveImageUrl(serverRes.imageUrl);
           }
         } catch (serverErr) {
           console.warn("Backend enhance fallback skipped:", serverErr);
@@ -272,8 +271,7 @@ export function AiImageModal({
         try {
           const uploaded = await uploadImage(synthesized);
           if (uploaded?.url) {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
-            finalUrl = uploaded.url.startsWith("http") ? uploaded.url : `${apiBase}${uploaded.url}`;
+            finalUrl = resolveImageUrl(uploaded.url);
           } else {
             finalUrl = synthesized;
           }

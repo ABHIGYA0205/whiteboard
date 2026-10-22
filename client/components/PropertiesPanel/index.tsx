@@ -13,8 +13,20 @@ import {
   Square,
   Sparkles,
   Palette,
+  Pipette,
   X
 } from "lucide-react";
+
+function getContrastColor(hexColor?: string): string {
+  if (!hexColor || hexColor === "transparent") return "#ffffff";
+  const hex = hexColor.replace("#", "");
+  if (hex.length < 6) return "#ffffff";
+  const r = parseInt(hex.substring(0, 2), 16) || 0;
+  const g = parseInt(hex.substring(2, 4), 16) || 0;
+  const b = parseInt(hex.substring(4, 6), 16) || 0;
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 140 ? "#0f172a" : "#ffffff";
+}
 
 type PropertiesPanelProps = {
   collaboration?: {
@@ -27,6 +39,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
   const isLight = theme === "light";
   const elements = useBoardStore((state) => state.elements);
   const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
+  const selectedElementId = useBoardStore((state) => state.selectedElementId);
   const tool = useBoardStore((state) => state.tool);
 
   // Store active properties
@@ -56,7 +69,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
   const deleteSelected = useBoardStore((state) => state.deleteSelected);
 
   // Only display selection properties when in select mode with selected elements
-  const hasSelection = selectedElementIds.length > 0 && tool === "select";
+  const hasSelection = (selectedElementIds.length > 0 || Boolean(selectedElementId)) && tool === "select";
   const isDrawingTool = [
     "rectangle",
     "diamond",
@@ -195,135 +208,189 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
           </button>
         </div>
       {/* 1. STROKE COLOR */}
-      <div>
-        <div style={{ fontSize: "11px", fontWeight: 700, color: subTextColor, marginBottom: "6px" }}>
-          Stroke
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-          {strokeSwatches.map((s) => {
-            const isActive = currentStroke.toLowerCase() === s.color.toLowerCase();
-            return (
-              <button
-                key={s.color}
-                onClick={() => updateProperty(() => setStrokeColor(s.color))}
-                title={s.label}
-                aria-label={`Stroke color ${s.label}`}
+      {(() => {
+        const isCustomStroke = !strokeSwatches.some((s) => s.color.toLowerCase() === currentStroke.toLowerCase());
+        return (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: subTextColor }}>
+                Stroke
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "10px", color: subTextColor, fontFamily: "monospace" }}>
+                <span
+                  style={{
+                    width: "9px",
+                    height: "9px",
+                    borderRadius: "50%",
+                    backgroundColor: currentStroke,
+                    border: "1px solid rgba(255, 255, 255, 0.25)"
+                  }}
+                />
+                <span>{currentStroke.toUpperCase()}</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+              {strokeSwatches.map((s) => {
+                const isActive = currentStroke.toLowerCase() === s.color.toLowerCase();
+                return (
+                  <button
+                    key={s.color}
+                    onClick={() => updateProperty(() => setStrokeColor(s.color))}
+                    title={s.label}
+                    aria-label={`Stroke color ${s.label}`}
+                    style={{
+                      width: "24px",
+                      height: "24px",
+                      borderRadius: "6px",
+                      backgroundColor: s.color,
+                      border: isActive ? `2px solid ${activeBtnBorder}` : `1px solid ${borderColor}`,
+                      boxShadow: isActive ? "0 0 0 2px rgba(99,102,241,0.35)" : "none",
+                      cursor: "pointer",
+                      padding: 0,
+                      transition: "all 0.15s ease"
+                    }}
+                  />
+                );
+              })}
+              {/* Custom color picker */}
+              <label
+                title={isCustomStroke ? `Selected custom stroke: ${currentStroke}` : "Choose custom stroke color"}
                 style={{
                   width: "24px",
                   height: "24px",
                   borderRadius: "6px",
-                  backgroundColor: s.color,
-                  border: isActive ? `2px solid ${activeBtnBorder}` : `1px solid ${borderColor}`,
-                  boxShadow: isActive ? "0 0 0 2px rgba(99,102,241,0.3)" : "none",
+                  border: isCustomStroke ? `2px solid ${activeBtnBorder}` : `1px dashed ${borderColor}`,
+                  backgroundColor: isCustomStroke ? currentStroke : "transparent",
+                  boxShadow: isCustomStroke ? "0 0 0 2px rgba(99,102,241,0.35)" : "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                   cursor: "pointer",
-                  padding: 0
+                  position: "relative",
+                  overflow: "hidden",
+                  transition: "all 0.15s ease"
                 }}
-              />
-            );
-          })}
-          {/* Custom color */}
-          <label
-            title="Custom stroke color"
-            style={{
-              width: "24px",
-              height: "24px",
-              borderRadius: "6px",
-              border: `1px dashed ${borderColor}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              position: "relative",
-              overflow: "hidden"
-            }}
-          >
-            <span style={{ fontSize: "11px", color: subTextColor }}>+</span>
-            <input
-              type="color"
-              value={currentStroke.startsWith("#") ? currentStroke : "#1e293b"}
-              onChange={(e) => updateProperty(() => setStrokeColor(e.target.value))}
-              style={{
-                position: "absolute",
-                inset: 0,
-                opacity: 0,
-                cursor: "pointer",
-                width: "100%",
-                height: "100%"
-              }}
-            />
-          </label>
-        </div>
-      </div>
-
-      {/* 2. BACKGROUND COLOR */}
-      {showFill && (
-        <div>
-          <div style={{ fontSize: "11px", fontWeight: 700, color: subTextColor, marginBottom: "6px" }}>
-            Background
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-            {bgSwatches.map((s) => {
-              const isTrans = s.color === "transparent";
-              const isActive =
-                currentFill.toLowerCase() === s.color.toLowerCase() ||
-                (isTrans && (!currentFill || currentFill === "transparent"));
-              return (
-                <button
-                  key={s.color}
-                  onClick={() => updateProperty(() => setFillColor(s.color))}
-                  title={s.label}
-                  aria-label={`Background color ${s.label}`}
+              >
+                {isCustomStroke ? (
+                  <Pipette size={11} color={getContrastColor(currentStroke)} />
+                ) : (
+                  <span style={{ fontSize: "11px", color: subTextColor }}>+</span>
+                )}
+                <input
+                  type="color"
+                  value={currentStroke.startsWith("#") ? currentStroke : "#1e293b"}
+                  onChange={(e) => updateProperty(() => setStrokeColor(e.target.value))}
                   style={{
-                    width: "24px",
-                    height: "24px",
-                    borderRadius: "6px",
-                    backgroundColor: isTrans ? "transparent" : s.color,
-                    backgroundImage: isTrans
-                      ? "linear-gradient(45deg, #cbd5e1 25%, transparent 25%), linear-gradient(-45deg, #cbd5e1 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cbd5e1 75%), linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)"
-                      : "none",
-                    backgroundSize: "8px 8px",
-                    border: isActive ? `2px solid ${activeBtnBorder}` : `1px solid ${borderColor}`,
-                    boxShadow: isActive ? "0 0 0 2px rgba(99,102,241,0.3)" : "none",
+                    position: "absolute",
+                    inset: 0,
+                    opacity: 0,
                     cursor: "pointer",
-                    padding: 0
+                    width: "100%",
+                    height: "100%"
                   }}
                 />
-              );
-            })}
-            {/* Custom background */}
-            <label
-              title="Custom background color"
-              style={{
-                width: "24px",
-                height: "24px",
-                borderRadius: "6px",
-                border: `1px dashed ${borderColor}`,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                position: "relative",
-                overflow: "hidden"
-              }}
-            >
-              <span style={{ fontSize: "11px", color: subTextColor }}>+</span>
-              <input
-                type="color"
-                value={currentFill.startsWith("#") ? currentFill : "#ffffff"}
-                onChange={(e) => updateProperty(() => setFillColor(e.target.value))}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  opacity: 0,
-                  cursor: "pointer",
-                  width: "100%",
-                  height: "100%"
-                }}
-              />
-            </label>
+              </label>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* 2. FILL COLOR */}
+      {showFill && (() => {
+        const isCustomFill =
+          currentFill !== "transparent" &&
+          !bgSwatches.some((s) => s.color.toLowerCase() === currentFill.toLowerCase());
+        return (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: subTextColor }}>
+                Fill Color
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "10px", color: subTextColor, fontFamily: "monospace" }}>
+                <span
+                  style={{
+                    width: "9px",
+                    height: "9px",
+                    borderRadius: "50%",
+                    backgroundColor: currentFill === "transparent" ? "#94a3b8" : currentFill,
+                    border: "1px solid rgba(255, 255, 255, 0.25)"
+                  }}
+                />
+                <span>{currentFill === "transparent" ? "NONE" : currentFill.toUpperCase()}</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+              {bgSwatches.map((s) => {
+                const isTrans = s.color === "transparent";
+                const isActive =
+                  currentFill.toLowerCase() === s.color.toLowerCase() ||
+                  (isTrans && (!currentFill || currentFill === "transparent"));
+                return (
+                  <button
+                    key={s.color}
+                    onClick={() => updateProperty(() => setFillColor(s.color))}
+                    title={s.label}
+                    aria-label={`Fill color ${s.label}`}
+                    style={{
+                      width: "24px",
+                      height: "24px",
+                      borderRadius: "6px",
+                      backgroundColor: isTrans ? "transparent" : s.color,
+                      backgroundImage: isTrans
+                        ? "linear-gradient(45deg, #cbd5e1 25%, transparent 25%), linear-gradient(-45deg, #cbd5e1 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cbd5e1 75%), linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)"
+                        : "none",
+                      backgroundSize: "8px 8px",
+                      border: isActive ? `2px solid ${activeBtnBorder}` : `1px solid ${borderColor}`,
+                      boxShadow: isActive ? "0 0 0 2px rgba(99,102,241,0.35)" : "none",
+                      cursor: "pointer",
+                      padding: 0,
+                      transition: "all 0.15s ease"
+                    }}
+                  />
+                );
+              })}
+              {/* Custom fill color picker */}
+              <label
+                title={isCustomFill ? `Selected custom fill: ${currentFill}` : "Choose custom fill color"}
+                style={{
+                  width: "24px",
+                  height: "24px",
+                  borderRadius: "6px",
+                  border: isCustomFill ? `2px solid ${activeBtnBorder}` : `1px dashed ${borderColor}`,
+                  backgroundColor: isCustomFill ? currentFill : "transparent",
+                  boxShadow: isCustomFill ? "0 0 0 2px rgba(99,102,241,0.35)" : "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  position: "relative",
+                  overflow: "hidden",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                {isCustomFill ? (
+                  <Pipette size={11} color={getContrastColor(currentFill)} />
+                ) : (
+                  <span style={{ fontSize: "11px", color: subTextColor }}>+</span>
+                )}
+                <input
+                  type="color"
+                  value={currentFill.startsWith("#") ? currentFill : "#ffffff"}
+                  onChange={(e) => updateProperty(() => setFillColor(e.target.value))}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    opacity: 0,
+                    cursor: "pointer",
+                    width: "100%",
+                    height: "100%"
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 3. FILL STYLE */}
       {showFill && (
@@ -565,7 +632,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
             <div style={{ display: "flex", gap: "6px" }}>
               <button
                 onClick={() => handleAction(sendToBack)}
-                title="Send to back"
+                title="Send to back (Ctrl+[ / Cmd+[)"
                 aria-label="Send to back"
                 style={{
                   flex: 1,
@@ -622,7 +689,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
               </button>
               <button
                 onClick={() => handleAction(bringToFront)}
-                title="Bring to front"
+                title="Bring to front (Ctrl+] / Cmd+])"
                 aria-label="Bring to front"
                 style={{
                   flex: 1,

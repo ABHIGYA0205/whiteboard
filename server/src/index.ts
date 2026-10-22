@@ -30,6 +30,14 @@ async function start() {
         callback(null, true);
         return;
       }
+      // Allow localhost / 127.0.0.1 on any port, or local LAN IP addresses (192.168.x, 10.x, 172.x)
+      if (
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+        /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)
+      ) {
+        callback(null, true);
+        return;
+      }
       callback(new Error(`Origin ${origin} is not allowed by CORS.`));
     },
     credentials: true
@@ -47,8 +55,17 @@ async function start() {
   // Defensible 5mb payload limit instead of 100mb now that base64 images are persisted (A1.5)
   app.use(express.json({ limit: "5mb" }));
 
-  // Static uploads directory for persisted images (A1.3)
-  app.use("/uploads", express.static(getUploadsDir()));
+  // Static uploads directory for persisted images with open CORS for canvas rendering (A1.3)
+  app.use(
+    "/uploads",
+    (_req, res, next) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      next();
+    },
+    express.static(getUploadsDir())
+  );
 
   app.use("/board", boardRouter);
   app.use("/ai", aiRouter);

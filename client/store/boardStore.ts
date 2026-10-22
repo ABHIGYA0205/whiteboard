@@ -268,11 +268,21 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         }
       }
 
+      // Preserve selection: retain selected element IDs that still exist in nextElements
+      const nextIdSet = new Set(nextElements.map((el) => el.id));
+      const currentSelected = state.selectedElementIds.length > 0
+        ? state.selectedElementIds
+        : (state.selectedElementId ? [state.selectedElementId] : []);
+      const retainedSelectedIds = currentSelected.filter((id) => nextIdSet.has(id));
+      const retainedSelectedId = retainedSelectedIds.includes(state.selectedElementId || "")
+        ? state.selectedElementId
+        : retainedSelectedIds[0] ?? null;
+
       return {
         elements: nextElements,
         ...(version !== undefined ? { version } : {}),
-        selectedElementId: activeEditId ? state.selectedElementId : null,
-        selectedElementIds: activeEditId ? state.selectedElementIds : []
+        selectedElementId: retainedSelectedId,
+        selectedElementIds: retainedSelectedIds
       };
     }),
   selectElement: (payload) =>
@@ -294,10 +304,13 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   deleteSelected: () => {
     let nextElements: WhiteboardElement[] | null = null;
     set((state) => {
-      if (state.selectedElementIds.length === 0) return state;
-      const toDelete = new Set(state.selectedElementIds);
+      const targetIds = state.selectedElementIds.length > 0
+        ? state.selectedElementIds
+        : (state.selectedElementId ? [state.selectedElementId] : []);
+      if (targetIds.length === 0) return state;
+      const toDelete = new Set(targetIds);
       const updatedDeleted = new Set(state.deletedElementIds);
-      state.selectedElementIds.forEach((id) => updatedDeleted.add(id));
+      targetIds.forEach((id) => updatedDeleted.add(id));
 
       nextElements = state.elements.filter((element) => !toDelete.has(element.id));
       return {

@@ -19,7 +19,11 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
 
   useEffect(() => {
     if (isOpen) {
-      setName(initialName || localStorage.getItem("whiteboard_user_name") || "");
+      const stored =
+        typeof window !== "undefined"
+          ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+          : "";
+      setName(initialName || stored || "");
       setTimeout(() => inputRef.current?.focus(), 60);
     }
   }, [isOpen, initialName]);
@@ -27,7 +31,10 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Prevent dismissing modal before setting name on first entry
-      if (e.key === "Escape" && isOpen && localStorage.getItem("whiteboard_user_name")) {
+      const hasStored =
+        typeof window !== "undefined" &&
+        (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"));
+      if (e.key === "Escape" && isOpen && hasStored) {
         onClose?.();
       }
     };
@@ -41,10 +48,23 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
     e?.preventDefault();
     const trimmed = name.trim();
     if (trimmed) {
-      localStorage.setItem("whiteboard_user_name", trimmed);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("whiteboard_user_name", trimmed);
+        localStorage.setItem("whiteboard_user_name", trimmed);
+      }
       onSave(trimmed);
       onClose?.();
     }
+  };
+
+  const handleContinueAsGuest = () => {
+    const guestName = `Guest-${Math.floor(1000 + Math.random() * 9000)}`;
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("whiteboard_user_name", guestName);
+      localStorage.setItem("whiteboard_user_name", guestName);
+    }
+    onSave(guestName);
+    onClose?.();
   };
 
   const getInitials = (str: string) => {
@@ -204,6 +224,24 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
             <UserCheck size={18} />
             <span>Continue to Board</span>
             <ArrowRight size={16} />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleContinueAsGuest}
+            style={{
+              padding: "10px 20px",
+              borderRadius: "12px",
+              background: "transparent",
+              border: isLight ? "1px solid #cbd5e1" : "1px solid rgba(255, 255, 255, 0.12)",
+              color: isLight ? "#64748b" : "#94a3b8",
+              fontWeight: 600,
+              fontSize: "13px",
+              cursor: "pointer",
+              transition: "all 0.15s ease"
+            }}
+          >
+            Continue as Guest
           </button>
         </form>
       </div>

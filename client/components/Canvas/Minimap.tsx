@@ -11,7 +11,7 @@ export function Minimap() {
   const theme = useBoardStore((state) => state.theme);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const MINIMAP_WIDTH = 200;
@@ -97,7 +97,7 @@ export function Minimap() {
 
   // Render Minimap
   useEffect(() => {
-    if (isCollapsed) return;
+    if (!isOpen) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -268,7 +268,7 @@ export function Minimap() {
     ctx.fillRect(vpMiniX + vpMiniW - 1, vpMiniY + vpMiniH - cornerSize + 1, 2, cornerSize);
 
     ctx.restore();
-  }, [elements, viewport, theme, isCollapsed, calculateBounds]);
+  }, [elements, viewport, theme, isOpen, calculateBounds]);
 
   // Navigate to point from minimap coordinates
   const panToMinimapPoint = useCallback(
@@ -334,43 +334,80 @@ export function Minimap() {
         gap: "6px"
       }}
     >
-      {/* Minimap Card */}
-      <div
-        style={{
-          background: "rgba(18, 18, 24, 0.88)",
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          border: "1px solid rgba(255, 255, 255, 0.12)",
-          borderRadius: "12px",
-          overflow: "hidden",
-          boxShadow: "0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05)",
-          transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)"
-        }}
-      >
-        {/* Header bar */}
-        <div
+      {!isOpen ? (
+        <button
+          onClick={() => setIsOpen(true)}
+          title="Open Navigator (Minimap)"
+          aria-label="Open Navigator"
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            padding: "6px 10px",
-            background: "rgba(255, 255, 255, 0.03)",
-            borderBottom: isCollapsed ? "none" : "1px solid rgba(255, 255, 255, 0.06)",
-            fontSize: "11px",
-            color: "#9ca3af",
-            fontWeight: 600,
-            userSelect: "none"
+            gap: "7px",
+            background: theme === "light" ? "rgba(255, 255, 255, 0.95)" : "rgba(18, 18, 24, 0.9)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            border: theme === "light" ? "1px solid rgba(0, 0, 0, 0.12)" : "1px solid rgba(255, 255, 255, 0.14)",
+            borderRadius: "10px",
+            padding: "8px 12px",
+            color: theme === "light" ? "#1e293b" : "#f1f5f9",
+            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.35)",
+            cursor: "pointer",
+            fontSize: "12px",
+            fontWeight: 700,
+            transition: "all 0.18s ease"
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateY(-2px)";
+            e.currentTarget.style.borderColor = "#818cf8";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "none";
+            e.currentTarget.style.borderColor = theme === "light" ? "rgba(0, 0, 0, 0.12)" : "rgba(255, 255, 255, 0.14)";
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <Map size={13} style={{ color: "#818cf8" }} />
-            <span style={{ letterSpacing: "0.04em", fontSize: "10px", textTransform: "uppercase" }}>
-              Navigator
-            </span>
-          </div>
+          <Map size={14} style={{ color: "#818cf8" }} />
+          <span>Navigator</span>
+        </button>
+      ) : (
+        /* Minimap Card */
+        <div
+          style={{
+            background: theme === "light" ? "rgba(255, 255, 255, 0.95)" : "rgba(18, 18, 24, 0.92)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            border: theme === "light" ? "1px solid rgba(0, 0, 0, 0.12)" : "1px solid rgba(255, 255, 255, 0.14)",
+            borderRadius: "12px",
+            overflow: "hidden",
+            boxShadow: theme === "light"
+              ? "0 10px 30px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
+              : "0 12px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05)",
+            transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+            animation: "fadeInScale 0.18s ease-out"
+          }}
+        >
+          {/* Header bar */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              background: theme === "light" ? "rgba(0, 0, 0, 0.03)" : "rgba(255, 255, 255, 0.03)",
+              borderBottom: theme === "light" ? "1px solid rgba(0, 0, 0, 0.08)" : "1px solid rgba(255, 255, 255, 0.06)",
+              fontSize: "11px",
+              color: theme === "light" ? "#475569" : "#9ca3af",
+              fontWeight: 600,
+              userSelect: "none"
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Map size={13} style={{ color: "#818cf8" }} />
+              <span style={{ letterSpacing: "0.04em", fontSize: "10px", textTransform: "uppercase" }}>
+                Navigator
+              </span>
+            </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-            {!isCollapsed && (
+            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
               <button
                 onClick={handleResetView}
                 title="Reset View to (0,0) at 100%"
@@ -388,30 +425,28 @@ export function Minimap() {
               >
                 <LocateFixed size={12} />
               </button>
-            )}
 
-            <button
-              onClick={() => setIsCollapsed(!isCollapsed)}
-              title={isCollapsed ? "Expand Minimap" : "Collapse Minimap"}
-              aria-label={isCollapsed ? "Expand Minimap" : "Collapse Minimap"}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#9ca3af",
-                padding: "3px 4px",
-                borderRadius: "4px",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center"
-              }}
-            >
-              {isCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
-            </button>
+              <button
+                onClick={() => setIsOpen(false)}
+                title="Close Navigator"
+                aria-label="Close Navigator"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#9ca3af",
+                  padding: "3px 4px",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center"
+                }}
+              >
+                <Minimize2 size={12} />
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* Canvas area */}
-        {!isCollapsed && (
+          {/* Canvas area */}
           <div
             style={{
               position: "relative",
@@ -429,8 +464,8 @@ export function Minimap() {
               style={{ display: "block" }}
             />
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

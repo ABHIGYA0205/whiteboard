@@ -1,6 +1,6 @@
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
 
-const getApiUrl = () => {
+export const getApiUrl = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
   if (envUrl && envUrl.trim() !== "") {
     return envUrl.trim();
@@ -12,6 +12,15 @@ const getApiUrl = () => {
   }
   return "http://localhost:4001";
 };
+
+export function resolveImageUrl(url?: string): string {
+  if (!url) return "";
+  if (url.startsWith("data:") || url.startsWith("blob:")) return url;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const baseUrl = getApiUrl();
+  const cleanPath = url.startsWith("/") ? url : `/${url}`;
+  return `${baseUrl}${cleanPath}`;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const baseUrl = getApiUrl();
@@ -101,11 +110,12 @@ export function deleteBoardRemote(id: string) {
   });
 }
 
-export function uploadImage(imageBase64: string) {
-  return request<{ url: string }>("/board/upload", {
+export async function uploadImage(imageBase64: string): Promise<{ url: string }> {
+  const res = await request<{ url: string }>("/board/upload", {
     method: "POST",
     body: JSON.stringify({ imageBase64 })
   });
+  return { url: resolveImageUrl(res.url) };
 }
 
 export function cleanBoard(elements: WhiteboardElement[]) {
@@ -129,7 +139,7 @@ export async function enhanceSketch(
   });
 
   if (initial.imageUrl) {
-    return { imageUrl: initial.imageUrl };
+    return { imageUrl: resolveImageUrl(initial.imageUrl) };
   }
 
   if (!initial.jobId) {
@@ -150,7 +160,7 @@ export async function enhanceSketch(
     onProgress?.(status.progress || 0);
 
     if (status.status === "completed" && status.imageUrl) {
-      return { imageUrl: status.imageUrl };
+      return { imageUrl: resolveImageUrl(status.imageUrl) };
     }
 
     if (status.status === "failed") {

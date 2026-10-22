@@ -6,6 +6,7 @@ export type ToolType =
   | "rectangle"
   | "diamond"
   | "circle"
+  | "ellipse"
   | "line"
   | "arrow"
   | "text"
@@ -31,9 +32,9 @@ export type WhiteboardElement = {
   strokeWidth: number;
   strokeStyle?: "solid" | "dashed" | "dotted";
   fillColor?: string;
-  fillStyle?: "transparent" | "semi" | "solid";
+  fillStyle?: "transparent" | "semi" | "solid" | "none" | "hachure" | string;
   roughness?: number; // 0 = architect/clean, 1 = artist, 2 = cartoonist
-  roundness?: boolean;
+  roundness?: boolean | number;
   text?: string;
   fontSize?: number;
   imageUrl?: string;
@@ -54,7 +55,7 @@ export type CursorPosition = {
   userId: string;
   x: number;
   y: number;
-  color: string;
+  color?: string;
   name?: string;
   lastSeen?: number;
 };
@@ -68,8 +69,10 @@ export type PresenceUser = {
 export type BoardDocument = {
   id: string;
   version: number;
+  title?: string;
   ownerId?: string;
   shareToken?: string;
+  backgroundColor?: string;
   elements: WhiteboardElement[];
   createdAt: string;
   updatedAt?: string;

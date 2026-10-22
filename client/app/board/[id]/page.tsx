@@ -9,7 +9,7 @@ import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard } from "@/lib/
 import { useSocket } from "@/hooks/useSocket";
 import { useBoardStore } from "@/store/boardStore";
 import { useEffect, useRef, useState } from "react";
-import type { WhiteboardElement } from "@shared/types";
+import type { PresenceUser, WhiteboardElement } from "@shared/types";
 import { ShortcutsModal } from "@/components/Modals/ShortcutsModal";
 import { ShareModal } from "@/components/Modals/ShareModal";
 import { TemplatesModal } from "@/components/Modals/TemplatesModal";
@@ -69,9 +69,36 @@ export default function BoardPage({ params }: BoardPageProps) {
   const [isUserNameModalOpen, setIsUserNameModalOpen] = useState(false);
   const [isActiveUsersOpen, setIsActiveUsersOpen] = useState(false);
   const [currentUserName, setCurrentUserName] = useState("");
+  const [boardTitle, setBoardTitle] = useState("Untitled Board");
+
+  const handleTitleChange = (newTitle: string) => {
+    setBoardTitle(newTitle);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(`whiteboard_title_${boardId}`, newTitle);
+        const stored = localStorage.getItem("whiteboard_recent_boards");
+        let boards = stored ? JSON.parse(stored) : [];
+        let found = false;
+        boards = boards.map((b: any) => {
+          if (b.id === boardId) {
+            found = true;
+            return { ...b, title: newTitle };
+          }
+          return b;
+        });
+        if (!found) {
+          boards.unshift({ id: boardId, title: newTitle, visitedAt: Date.now() });
+        }
+        localStorage.setItem("whiteboard_recent_boards", JSON.stringify(boards.slice(0, 10)));
+      } catch {}
+    }
+  };
 
   useEffect(() => {
-    const stored = localStorage.getItem("whiteboard_user_name");
+    const stored =
+      typeof window !== "undefined"
+        ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+        : null;
     if (!stored) {
       setIsUserNameModalOpen(true);
     } else {
@@ -141,6 +168,18 @@ export default function BoardPage({ params }: BoardPageProps) {
         if (!cancelled) {
           loadBoard(board.elements, board.version || 0);
           lastSavedSnapshot.current = JSON.stringify(board.elements);
+          const savedTitle =
+            board.title ||
+            (typeof window !== "undefined" ? localStorage.getItem(`whiteboard_title_${boardId}`) : "") ||
+            "Untitled Board";
+          setBoardTitle(savedTitle);
+          try {
+            const stored = localStorage.getItem("whiteboard_recent_boards");
+            let boards = stored ? JSON.parse(stored) : [];
+            boards = boards.filter((b: any) => b.id !== boardId);
+            boards.unshift({ id: boardId, title: savedTitle, visitedAt: Date.now() });
+            localStorage.setItem("whiteboard_recent_boards", JSON.stringify(boards.slice(0, 10)));
+          } catch {}
         }
       } catch (error) {
         if (!cancelled) {
@@ -317,16 +356,48 @@ export default function BoardPage({ params }: BoardPageProps) {
         padding: 0
       }}
     >
-      {/* Top-Left: Minimal hamburger menu + mobile undo/redo */}
+      {/* Top-Left: Minimal hamburger menu + board title + mobile undo/redo */}
       <div className="top-left-nav">
         <Sidebar
           boardId={boardId}
+          boardTitle={boardTitle}
           saveStatus={saveStatus}
           isViewer={isViewer}
           onClear={handleClear}
           onDeleteBoard={handleDeleteBoard}
           onShowShortcuts={() => setIsShortcutsOpen(true)}
         />
+        <div style={{ display: "flex", alignItems: "center", marginLeft: "2px" }}>
+          <input
+            value={boardTitle}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            disabled={isViewer}
+            title={isViewer ? "Board title (read-only)" : "Click to rename board"}
+            aria-label="Board Title"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: theme === "light" ? "#0f172a" : "#f8fafc",
+              fontWeight: 700,
+              fontSize: "13px",
+              padding: "4px 8px",
+              borderRadius: "6px",
+              maxWidth: "160px",
+              outline: "none",
+              cursor: isViewer ? "default" : "text",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap"
+            }}
+            onFocus={(e) => {
+              if (!isViewer) {
+                e.target.style.background = theme === "light" ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.08)";
+              }
+            }}
+            onBlur={(e) => {
+              e.target.style.background = "transparent";
+            }}
+          />
+        </div>
         <div className="mobile-header-actions">
           <button
             className="mobile-header-btn"
@@ -404,17 +475,38 @@ export default function BoardPage({ params }: BoardPageProps) {
       <div className="top-presence-bar">
         {/* Collaborators Avatar Stack (Figma / Canva style) */}
         {(() => {
-          const effectivePresenceUsers = presenceUsers.length > 0
-            ? presenceUsers.map((u) => {
-                if (
-                  (Boolean(currentUserId) && u.userId === currentUserId) ||
-                  (Boolean(currentUserName) && Boolean(u.name) && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase())
-                ) {
-                  return { ...u, name: currentUserName || u.name };
-                }
-                return u;
-              })
-            : [{ userId: currentUserId || "local-user", name: currentUserName || "You", color: "#6366f1" }];
+          const effectiveSelfId =
+            currentUserId ||
+            (typeof window !== "undefined" ? sessionStorage.getItem("whiteboard_user_id") : null);
+
+          const userMap = new Map<string, PresenceUser>();
+
+          // Collect all reported presence users
+          for (const u of presenceUsers) {
+            if (u && u.userId) {
+              const isSelf = Boolean(effectiveSelfId) && u.userId === effectiveSelfId;
+              userMap.set(u.userId, {
+                userId: u.userId,
+                name: isSelf && currentUserName ? currentUserName : (u.name || `User-${u.userId.slice(0, 4)}`),
+                color: u.color || "#6366f1"
+              });
+            }
+          }
+
+          // Always ensure the local self user is present
+          if (effectiveSelfId && !userMap.has(effectiveSelfId)) {
+            userMap.set(effectiveSelfId, {
+              userId: effectiveSelfId,
+              name: currentUserName || "You",
+              color: "#6366f1"
+            });
+          }
+
+          const allUsers = Array.from(userMap.values());
+          // Pin self user first, then collaborators
+          const selfUser = allUsers.find((u) => u.userId === effectiveSelfId);
+          const otherUsers = allUsers.filter((u) => u.userId !== effectiveSelfId);
+          const effectivePresenceUsers = selfUser ? [selfUser, ...otherUsers] : allUsers;
 
           return (
             <div
@@ -425,7 +517,7 @@ export default function BoardPage({ params }: BoardPageProps) {
               <div style={{ display: "flex", alignItems: "center" }}>
                 {effectivePresenceUsers.slice(0, 5).map((user, idx) => {
                   const initials = user.name
-                    ? user.name.split(/\s+/).map((n) => n[0]).join("").slice(0, 2).toUpperCase()
+                    ? user.name.split(/\s+/).map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
                     : "U";
                   return (
                     <div
@@ -455,6 +547,29 @@ export default function BoardPage({ params }: BoardPageProps) {
                     </div>
                   );
                 })}
+                {effectivePresenceUsers.length > 5 && (
+                  <div
+                    style={{
+                      width: "28px",
+                      height: "28px",
+                      borderRadius: "50%",
+                      backgroundColor: "#374151",
+                      color: "#f3f4f6",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      border: theme === "light" ? "2px solid #ffffff" : "2px solid #181824",
+                      marginLeft: "-8px",
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.25)",
+                      zIndex: 4
+                    }}
+                    title={`${effectivePresenceUsers.length - 5} more collaborators`}
+                  >
+                    +{effectivePresenceUsers.length - 5}
+                  </div>
+                )}
               </div>
 
               {/* Active online count badge */}
@@ -468,7 +583,9 @@ export default function BoardPage({ params }: BoardPageProps) {
                     boxShadow: "0 0 8px #10b981"
                   }}
                 />
-                <span className="presence-count-text">{effectivePresenceUsers.length} online</span>
+                <span className="presence-count-text">
+                  {effectivePresenceUsers.length} {effectivePresenceUsers.length === 1 ? "online" : "collaborating"}
+                </span>
               </div>
             </div>
           );
@@ -580,6 +697,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         onClose={() => setIsActiveUsersOpen(false)}
         presenceUsers={presenceUsers}
         currentUserName={currentUserName}
+        onOpenUserNameModal={() => setIsUserNameModalOpen(true)}
       />
 
       {/* A1.4: Board cleared undo toast */}

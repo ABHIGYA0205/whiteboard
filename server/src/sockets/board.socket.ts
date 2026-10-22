@@ -179,6 +179,10 @@ export function registerBoardSocket(io: Server, socket: Socket) {
           boardId: targetBoardId,
           users: Array.from(roomUsers.get(targetBoardId)!.values())
         });
+        socket.to(targetBoardId).emit("presence:join", {
+          boardId: targetBoardId,
+          user: identity
+        });
       }
     }
   });

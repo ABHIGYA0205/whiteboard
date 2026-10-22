@@ -50,8 +50,12 @@ export function useKeyboardShortcuts({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
       const activeEl = document.activeElement as HTMLElement | null;
       const isTyping =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        Boolean(target?.isContentEditable) ||
         activeEl?.tagName === "INPUT" ||
         activeEl?.tagName === "TEXTAREA" ||
         Boolean(activeEl?.isContentEditable) ||
@@ -69,6 +73,14 @@ export function useKeyboardShortcuts({
         event.preventDefault();
         const allElements = useBoardStore.getState().elements;
         selectElement(allElements.map((el) => el.id));
+        setTool("select");
+        return;
+      }
+
+      // P2-4: Toggle Style & Properties panel (S)
+      if (!isMeta && key === "s") {
+        event.preventDefault();
+        useBoardStore.getState().togglePropertiesOpen();
         return;
       }
 
@@ -154,7 +166,9 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      if ((key === "backspace" || key === "delete") && selectedElementIds.length > 0) {
+      const currentSelectedIds = useBoardStore.getState().selectedElementIds;
+      const currentSelectedId = useBoardStore.getState().selectedElementId;
+      if ((key === "backspace" || key === "delete") && (currentSelectedIds.length > 0 || currentSelectedId)) {
         event.preventDefault();
         const nextElements = deleteSelected();
         if (nextElements) {

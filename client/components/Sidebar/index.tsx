@@ -27,12 +27,13 @@ type SidebarProps = {
   boardId: string;
   saveStatus?: "saved" | "saving" | "conflict" | "error";
   isViewer?: boolean;
+  boardTitle?: string;
   onClear: () => void;
   onDeleteBoard?: () => void;
   onShowShortcuts?: () => void;
 };
 
-export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard, onShowShortcuts }: SidebarProps) {
+export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, onDeleteBoard, onShowShortcuts }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const theme = useBoardStore((state) => state.theme);
   const setTheme = useBoardStore((state) => state.setTheme);
@@ -41,7 +42,16 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
   const triggerRef = useRef<HTMLButtonElement>(null);
   const elements = useBoardStore((state) => state.elements);
   const loadBoard = useBoardStore((state) => state.loadBoard);
-  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; visitedAt: number }>>([]);
+  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; title?: string; visitedAt?: number }>>([]);
+
+  const clearAllRecentBoards = () => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("whiteboard_recent_boards");
+        setRecentBoards([]);
+      } catch {}
+    }
+  };
 
   useEffect(() => {
     if (typeof window !== "undefined" && isOpen) {
@@ -226,7 +236,7 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
             }}
           >
             <div>
-              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>Whiteboard</div>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "Whiteboard"}</div>
               <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
             </div>
             {saveStatus && (
@@ -357,7 +367,26 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
           <>
             <div className="menu-divider" />
             <div className="sidebar-section">
-              <h4>Recent Boards</h4>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <h4>Recent Boards</h4>
+                <button
+                  onClick={clearAllRecentBoards}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--muted)",
+                    fontSize: "10px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: "2px 4px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em"
+                  }}
+                  title="Clear history"
+                >
+                  Clear all
+                </button>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
                 {recentBoards.map((b) => (
                   <div key={b.id} style={{ display: "flex", alignItems: "center", gap: "2px" }}>
@@ -371,7 +400,7 @@ export function Sidebar({ boardId, saveStatus, isViewer, onClear, onDeleteBoard,
                     >
                       <Clock size={13} style={{ color: "var(--muted)", flexShrink: 0, marginRight: "6px" }} />
                       <span style={{ color: b.id === boardId ? "var(--accent)" : "inherit", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        Board #{b.id.slice(0, 8)} {b.id === boardId ? "(current)" : ""}
+                        {b.title ? b.title : `Board #${b.id.slice(0, 8)}`} {b.id === boardId ? "(current)" : ""}
                       </span>
                     </button>
                     <button

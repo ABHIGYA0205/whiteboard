@@ -2,7 +2,7 @@
 
 import { CursorLayer } from "@/components/Cursor";
 import { useCanvas } from "@/hooks/useCanvas";
-import { uploadImage } from "@/lib/api";
+import { uploadImage, resolveImageUrl } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 import { getNormalizedBounds, getContrastStrokeColor } from "@/components/Canvas/drawingUtils";
 import type { CursorPosition, WhiteboardElement } from "@shared/types";
@@ -116,8 +116,7 @@ export function Canvas({ collaboration }: CanvasProps) {
       try {
         const uploadRes = await uploadImage(dataUrl);
         if (uploadRes?.url) {
-          const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
-          finalUrl = uploadRes.url.startsWith("http") ? uploadRes.url : `${apiBase}${uploadRes.url}`;
+          finalUrl = resolveImageUrl(uploadRes.url);
         }
       } catch {
         // Fallback to dataUrl
@@ -163,8 +162,7 @@ export function Canvas({ collaboration }: CanvasProps) {
             try {
               const res = await uploadImage(dataUrl);
               if (res?.url) {
-                const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
-                finalUrl = res.url.startsWith("http") ? res.url : `${apiBase}${res.url}`;
+                finalUrl = resolveImageUrl(res.url);
               }
             } catch {
               // fallback
@@ -257,6 +255,7 @@ export function Canvas({ collaboration }: CanvasProps) {
             }
           }}
           onKeyDown={(e) => {
+            e.stopPropagation();
             if (e.key === "Escape") {
               handleTextBlur(e.currentTarget.value);
             }

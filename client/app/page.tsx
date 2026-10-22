@@ -1,6 +1,6 @@
 "use client";
 
-import { createBoard, deleteBoardRemote } from "@/lib/api";
+import { createBoard } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, useEffect, useRef } from "react";
 import {
@@ -17,9 +17,7 @@ import {
   Download,
   Loader2,
   PenTool,
-  Check,
-  Clock,
-  Trash2
+  Check
 } from "lucide-react";
 
 export default function HomePage() {
@@ -27,32 +25,6 @@ export default function HomePage() {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [visibleItems, setVisibleItems] = useState<Record<string, boolean>>({});
-  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; visitedAt: number }>>([]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const stored = localStorage.getItem("whiteboard_recent_boards");
-        if (stored) {
-          setRecentBoards(JSON.parse(stored));
-        }
-      } catch {}
-    }
-  }, []);
-
-  const handleDeleteRecentBoard = async (idToDelete: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!window.confirm("Permanently delete this board?")) return;
-    try {
-      await deleteBoardRemote(idToDelete);
-    } catch {}
-    const updated = recentBoards.filter((b) => b.id !== idToDelete);
-    setRecentBoards(updated);
-    try {
-      localStorage.setItem("whiteboard_recent_boards", JSON.stringify(updated));
-    } catch {}
-  };
 
   const handleCreateBoard = () => {
     startTransition(async () => {
@@ -328,67 +300,6 @@ export default function HomePage() {
               )}
             </button>
             <span style={{ fontSize: "12px", color: "#64748b" }}>Instant launch • No account required</span>
-
-            {/* P1-6: Jump back into recent boards */}
-            {recentBoards.length > 0 && (
-              <div style={{ marginTop: "1.75rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Your Recent Boards
-                </span>
-                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", justifyContent: "center" }}>
-                  {recentBoards.slice(0, 6).map((b) => (
-                    <div
-                      key={b.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        background: "rgba(255, 255, 255, 0.04)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
-                        borderRadius: "10px",
-                        padding: "0 6px 0 12px",
-                        transition: "all 0.15s ease"
-                      }}
-                    >
-                      <a
-                        href={`/board/${b.id}`}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          padding: "8px 0",
-                          color: "#e2e8f0",
-                          fontSize: "12px",
-                          textDecoration: "none"
-                        }}
-                      >
-                        <Clock size={13} color="#818cf8" />
-                        <span>Board #{b.id.slice(0, 8)}</span>
-                      </a>
-                      <button
-                        onClick={(e) => handleDeleteRecentBoard(b.id, e)}
-                        title="Delete board"
-                        aria-label={`Delete board ${b.id.slice(0, 8)}`}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "#64748b",
-                          cursor: "pointer",
-                          padding: "6px",
-                          marginLeft: "4px",
-                          display: "flex",
-                          alignItems: "center",
-                          borderRadius: "4px"
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = "#64748b")}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {error && <p style={{ color: "#ef4444", marginTop: "1rem", fontSize: "14px" }}>{error}</p>}

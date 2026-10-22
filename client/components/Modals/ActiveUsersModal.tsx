@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Users, X, MousePointer, ShieldCheck, Wifi } from "lucide-react";
+import { Users, X, MousePointer, Wifi, Pencil, Eye, EyeOff } from "lucide-react";
 import { useBoardStore } from "@/store/boardStore";
 import type { PresenceUser } from "@shared/types";
 
@@ -10,17 +10,23 @@ type ActiveUsersModalProps = {
   onClose: () => void;
   presenceUsers: PresenceUser[];
   currentUserName: string;
+  onOpenUserNameModal?: () => void;
 };
 
 export function ActiveUsersModal({
   isOpen,
   onClose,
   presenceUsers,
-  currentUserName
+  currentUserName,
+  onOpenUserNameModal
 }: ActiveUsersModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const theme = useBoardStore((state) => state.theme);
   const isLight = theme === "light";
+
+  const currentUserId = useBoardStore((state) => state.currentUserId);
+  const followingUserId = useBoardStore((state) => state.followingUserId);
+  const setFollowingUserId = useBoardStore((state) => state.setFollowingUserId);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -49,34 +55,39 @@ export function ActiveUsersModal({
     };
   }, [isOpen, onClose]);
 
-  const currentUserId = useBoardStore((state) => state.currentUserId);
-
   if (!isOpen) return null;
 
-  // Build accurate display list, mapping the current user cleanly
-  let displayUsers = presenceUsers.map((u) => {
-    const isSelf =
-      (Boolean(currentUserId) && u.userId === currentUserId) ||
-      (Boolean(currentUserName) && Boolean(u.name) && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase());
-    if (isSelf && currentUserName) {
-      return { ...u, name: currentUserName };
+  const effectiveSelfId =
+    currentUserId ||
+    (typeof window !== "undefined" ? sessionStorage.getItem("whiteboard_user_id") : null);
+
+  // Accurate deduplication of active participants by userId
+  const userMap = new Map<string, PresenceUser>();
+
+  for (const u of presenceUsers) {
+    if (u && u.userId) {
+      const isSelf = Boolean(effectiveSelfId) && u.userId === effectiveSelfId;
+      userMap.set(u.userId, {
+        userId: u.userId,
+        name: isSelf && currentUserName ? currentUserName : (u.name || `User-${u.userId.slice(0, 4)}`),
+        color: u.color || "#6366f1"
+      });
     }
-    return u;
-  });
+  }
 
-  const hasSelf = displayUsers.some(
-    (u) =>
-      (Boolean(currentUserId) && u.userId === currentUserId) ||
-      (Boolean(currentUserName) && Boolean(u.name) && u.name.trim().toLowerCase() === currentUserName.trim().toLowerCase())
-  );
-
-  if (!hasSelf && currentUserName) {
-    displayUsers.unshift({
-      userId: currentUserId || "local-user",
-      name: currentUserName,
+  // Ensure current local user is always listed
+  if (effectiveSelfId && !userMap.has(effectiveSelfId)) {
+    userMap.set(effectiveSelfId, {
+      userId: effectiveSelfId,
+      name: currentUserName || "You",
       color: "#6366f1"
     });
   }
+
+  const allUsers = Array.from(userMap.values());
+  const selfUser = allUsers.find((u) => u.userId === effectiveSelfId);
+  const otherUsers = allUsers.filter((u) => u.userId !== effectiveSelfId);
+  const displayUsers = selfUser ? [selfUser, ...otherUsers] : allUsers;
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -110,7 +121,7 @@ export function ActiveUsersModal({
           border: isLight ? "1px solid rgba(0, 0, 0, 0.12)" : "1px solid rgba(255, 255, 255, 0.12)",
           borderRadius: "16px",
           width: "100%",
-          maxWidth: "360px",
+          maxWidth: "380px",
           padding: "20px",
           boxShadow: isLight
             ? "0 20px 50px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04)"
@@ -173,7 +184,7 @@ export function ActiveUsersModal({
                   style={{
                     fontSize: "10px",
                     fontWeight: 800,
-                    padding: "2px 6px",
+                    padding: "2px 8px",
                     borderRadius: "9999px",
                     background: isLight ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.2)",
                     color: isLight ? "#059669" : "#34d399",
@@ -185,13 +196,14 @@ export function ActiveUsersModal({
                 >
                   <span
                     style={{
-                      width: "5px",
-                      height: "5px",
+                      width: "6px",
+                      height: "6px",
                       borderRadius: "50%",
-                      backgroundColor: "#10b981"
+                      backgroundColor: "#10b981",
+                      boxShadow: "0 0 6px #10b981"
                     }}
                   />
-                  {displayUsers.length} Online
+                  {displayUsers.length} {displayUsers.length === 1 ? "Online" : "Collaborating"}
                 </span>
               </div>
               <p style={{ margin: "2px 0 0", fontSize: "12px", color: isLight ? "#64748b" : "#94a3b8" }}>
@@ -226,22 +238,19 @@ export function ActiveUsersModal({
             display: "flex",
             flexDirection: "column",
             gap: "8px",
-            maxHeight: "320px",
+            maxHeight: "340px",
             overflowY: "auto",
             position: "relative",
             paddingRight: "2px"
           }}
         >
-          {displayUsers.map((user) => {
-            const isSelf =
-              (Boolean(currentUserId) && user.userId === currentUserId) ||
-              (Boolean(currentUserName) &&
-                Boolean(user.name) &&
-                user.name.trim().toLowerCase() === currentUserName.trim().toLowerCase());
+          {displayUsers.map((user, idx) => {
+            const isSelf = Boolean(effectiveSelfId) && user.userId === effectiveSelfId;
+            const isFollowing = followingUserId === user.userId;
 
             return (
               <div
-                key={user.userId || user.name}
+                key={user.userId || `user-${idx}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -252,6 +261,10 @@ export function ActiveUsersModal({
                     ? isLight
                       ? "rgba(99, 102, 241, 0.08)"
                       : "rgba(99, 102, 241, 0.15)"
+                    : isFollowing
+                    ? isLight
+                      ? "rgba(16, 185, 129, 0.08)"
+                      : "rgba(16, 185, 129, 0.15)"
                     : isLight
                     ? "#f8fafc"
                     : "rgba(255, 255, 255, 0.03)",
@@ -259,14 +272,16 @@ export function ActiveUsersModal({
                     ? isLight
                       ? "1px solid rgba(99, 102, 241, 0.25)"
                       : "1px solid rgba(99, 102, 241, 0.35)"
+                    : isFollowing
+                    ? "1px solid rgba(16, 185, 129, 0.4)"
                     : isLight
                     ? "1px solid rgba(0, 0, 0, 0.06)"
                     : "1px solid rgba(255, 255, 255, 0.06)",
                   transition: "all 0.15s ease"
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                  <div style={{ position: "relative" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
+                  <div style={{ position: "relative", flexShrink: 0 }}>
                     <div
                       style={{
                         width: "36px",
@@ -301,7 +316,7 @@ export function ActiveUsersModal({
                     />
                   </div>
 
-                  <div style={{ minWidth: 0 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <span
                         style={{
@@ -311,10 +326,11 @@ export function ActiveUsersModal({
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
-                          maxWidth: "140px"
+                          maxWidth: "130px"
                         }}
+                        title={user.name}
                       >
-                        {user.name || "Anonymous User"}
+                        {user.name || "Collaborator"}
                       </span>
                       {isSelf && (
                         <span
@@ -332,9 +348,24 @@ export function ActiveUsersModal({
                           You
                         </span>
                       )}
+                      {isFollowing && (
+                        <span
+                          style={{
+                            fontSize: "9px",
+                            fontWeight: 800,
+                            padding: "1px 5px",
+                            borderRadius: "6px",
+                            background: "rgba(16, 185, 129, 0.2)",
+                            color: "#10b981",
+                            textTransform: "uppercase"
+                          }}
+                        >
+                          Following
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
-                      <MousePointer size={11} style={{ color: user.color || "#6366f1" }} />
+                      <MousePointer size={11} style={{ color: user.color || "#6366f1", flexShrink: 0 }} />
                       <span
                         style={{
                           fontSize: "11px",
@@ -347,13 +378,56 @@ export function ActiveUsersModal({
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px"
-                  }}
-                >
+                {/* Right action controls */}
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                  {isSelf ? (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onOpenUserNameModal?.();
+                      }}
+                      title="Edit your display name"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: "5px",
+                        cursor: "pointer",
+                        color: isLight ? "#64748b" : "#94a3b8",
+                        borderRadius: "6px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        transition: "all 0.15s ease"
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = "#6366f1")}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = isLight ? "#64748b" : "#94a3b8")}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setFollowingUserId(isFollowing ? null : user.userId)}
+                      title={isFollowing ? "Stop following" : "Follow viewport"}
+                      style={{
+                        background: isFollowing ? "#10b981" : isLight ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.08)",
+                        color: isFollowing ? "#ffffff" : isLight ? "#475569" : "#cbd5e1",
+                        border: "none",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        fontSize: "10px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        transition: "all 0.15s ease"
+                      }}
+                    >
+                      {isFollowing ? <EyeOff size={11} /> : <Eye size={11} />}
+                      <span>{isFollowing ? "Unfollow" : "Follow"}</span>
+                    </button>
+                  )}
+
                   <span
                     style={{
                       width: "8px",

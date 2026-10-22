@@ -25,14 +25,15 @@ const getSocketUrl = () => {
   return "http://localhost:4001";
 };
 
-const getLocalUserId = () => {
+export const getLocalUserId = () => {
   if (typeof window === "undefined") return "temp_user";
-  let id = localStorage.getItem("whiteboard_user_id");
+  // Use sessionStorage so each tab/window has its own unique collaborator presence and live cursor
+  let id = sessionStorage.getItem("whiteboard_user_id");
   if (!id) {
     id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : "u_" + Math.random().toString(36).substring(2, 11);
-    localStorage.setItem("whiteboard_user_id", id);
+    sessionStorage.setItem("whiteboard_user_id", id);
   }
   return id;
 };
@@ -63,11 +64,17 @@ export function useSocket(boardId: string) {
       if (!isMounted) return;
 
       const localId = getLocalUserId();
-      const storedName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
+      const storedName =
+        typeof window !== "undefined"
+          ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+          : null;
+
+      // Ensure local user ID is immediately registered in Zustand store
+      setCurrentUserId(localId);
 
       activeSocket = io(getSocketUrl(), {
         autoConnect: true,
-        transports: ["websocket"],
+        transports: ["polling", "websocket"],
         auth: {
           userId: localId,
           name: storedName || undefined
@@ -75,24 +82,11 @@ export function useSocket(boardId: string) {
       });
       socketRef.current = activeSocket;
 
-      // Initial join and state request
-      const join = () => {
-        const currentName = typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
-        activeSocket?.emit("join-board", { boardId, userName: currentName || undefined });
-        activeSocket?.emit("request-state", { boardId });
-      };
-
-      activeSocket.on("connect", join);
-      if (activeSocket.connected) {
-        join();
-      }
-
       const handleIdentity = (identity: PresenceUser) => {
         if (identity?.userId) {
           setCurrentUserId(identity.userId);
         }
       };
-      activeSocket.on("identity", handleIdentity);
 
       // Reconnect / state sync (A2.4)
       const handleBoardState = ({
@@ -158,6 +152,12 @@ export function useSocket(boardId: string) {
         useBoardStore.getState().addLaserPoint(point, color);
       };
 
+      const handleConnectError = (err: Error) => {
+        console.warn("Socket connection warning:", err.message);
+      };
+
+      // Register all listeners BEFORE emitting join/request-state
+      activeSocket.on("identity", handleIdentity);
       activeSocket.on("board:state", handleBoardState);
       activeSocket.on("draw", handleDraw);
       activeSocket.on("update-element", handleUpdateElement);
@@ -170,6 +170,22 @@ export function useSocket(boardId: string) {
       activeSocket.on("replace-elements", handleReplace);
       activeSocket.on("board-deleted", handleBoardDeleted);
       activeSocket.on("laser-point", handleLaser);
+      activeSocket.on("connect_error", handleConnectError);
+
+      // Initial join and state request
+      const join = () => {
+        const currentName =
+          typeof window !== "undefined"
+            ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+            : null;
+        activeSocket?.emit("join-board", { boardId, userName: currentName || undefined });
+        activeSocket?.emit("request-state", { boardId });
+      };
+
+      activeSocket.on("connect", join);
+      if (activeSocket.connected) {
+        join();
+      }
 
       return () => {
         activeSocket?.emit("leave-board", { boardId });
@@ -187,6 +203,7 @@ export function useSocket(boardId: string) {
         activeSocket?.off("replace-elements", handleReplace);
         activeSocket?.off("board-deleted", handleBoardDeleted);
         activeSocket?.off("laser-point", handleLaser);
+        activeSocket?.off("connect_error", handleConnectError);
         activeSocket?.disconnect();
         if (socketRef.current === activeSocket) {
           socketRef.current = null;
@@ -291,6 +308,7 @@ export function useSocket(boardId: string) {
       },
       emitUpdateUserName(name: string) {
         if (typeof window !== "undefined") {
+          sessionStorage.setItem("whiteboard_user_name", name);
           localStorage.setItem("whiteboard_user_name", name);
         }
         socketRef.current?.emit("update-user-name", { boardId, name });

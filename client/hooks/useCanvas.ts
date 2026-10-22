@@ -55,18 +55,21 @@ type InteractionState =
       mode: "dragging";
       elementIds: string[];
       origin: Point;
+      hasMoved?: boolean;
       previousElements: WhiteboardElement[];
     }
   | {
       mode: "resizing";
       elementId: string;
       handle: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+      hasMoved?: boolean;
       previousElements: WhiteboardElement[];
     }
   | {
       mode: "resizing-group";
       elementIds: string[];
       handle: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+      hasMoved?: boolean;
       initialBounds: { x: number; y: number; width: number; height: number };
       initialElements: WhiteboardElement[];
       previousElements: WhiteboardElement[];
@@ -343,6 +346,7 @@ export function useCanvas({
                 ...el,
                 points: el.points ? [...el.points] : []
               })),
+              hasMoved: false,
               previousElements: currentElements
             };
             return;
@@ -351,16 +355,20 @@ export function useCanvas({
       }
 
       // 2. Check resize handle on single selected element
-      if (selectedElementIds.length === 1 && activeElement && activeElement.id === selectedElementIds[0]) {
-        const handle = getResizeHandleAtPoint(point, activeElement);
-        if (handle) {
-          interactionRef.current = {
-            mode: "resizing",
-            elementId: activeElement.id,
-            handle,
-            previousElements: currentElements
-          };
-          return;
+      if (selectedElementIds.length === 1) {
+        const currentlySelected = currentElements.find((el) => el.id === selectedElementIds[0]);
+        if (currentlySelected) {
+          const handle = getResizeHandleAtPoint(point, currentlySelected);
+          if (handle) {
+            interactionRef.current = {
+              mode: "resizing",
+              elementId: currentlySelected.id,
+              handle,
+              hasMoved: false,
+              previousElements: currentElements
+            };
+            return;
+          }
         }
       }
 
@@ -397,6 +405,7 @@ export function useCanvas({
             mode: "dragging",
             elementIds: nextIds,
             origin: point,
+            hasMoved: false,
             previousElements: currentElements
           };
           return;
@@ -420,6 +429,7 @@ export function useCanvas({
             mode: "dragging",
             elementIds: cloneIds,
             origin: point,
+            hasMoved: false,
             previousElements: currentElements
           };
           return;
@@ -431,6 +441,7 @@ export function useCanvas({
             mode: "dragging",
             elementIds: selectedElementIds,
             origin: point,
+            hasMoved: false,
             previousElements: currentElements
           };
           return;
@@ -442,6 +453,7 @@ export function useCanvas({
           mode: "dragging",
           elementIds: [activeElement.id],
           origin: point,
+          hasMoved: false,
           previousElements: currentElements
         };
         return;
@@ -567,11 +579,12 @@ export function useCanvas({
     const currentElements = elementsRef.current;
     const currentViewport = viewportRef.current;
     const currentUserName =
-      typeof window !== "undefined" ? localStorage.getItem("whiteboard_user_name") : null;
+      typeof window !== "undefined"
+        ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+        : null;
     collaboration.emitCursor({
       x: point.x,
       y: point.y,
-      color: strokeColor,
       name: currentUserName || undefined
     });
 
@@ -642,6 +655,12 @@ export function useCanvas({
     if (interaction.mode === "dragging") {
       const deltaX = point.x - interaction.origin.x;
       const deltaY = point.y - interaction.origin.y;
+      if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) {
+        interaction.hasMoved = true;
+      }
+      if (!interaction.hasMoved) {
+        return;
+      }
       const idSet = new Set(interaction.elementIds);
       const nextElements = currentElements.map((element) => {
         if (idSet.has(element.id)) {
@@ -690,6 +709,7 @@ export function useCanvas({
     }
 
     if (interaction.mode === "resizing") {
+      interaction.hasMoved = true;
       const nextElements = currentElements.map((element) =>
         element.id === interaction.elementId
           ? resizeElement(element, interaction.handle, point)
@@ -706,6 +726,7 @@ export function useCanvas({
     }
 
     if (interaction.mode === "resizing-group") {
+      interaction.hasMoved = true;
       const idSet = new Set(interaction.elementIds);
       const targetInitialEls = interaction.initialElements.filter((el) =>
         idSet.has(el.id)
@@ -787,9 +808,10 @@ export function useCanvas({
     }
 
     if (
-      interactionRef.current.mode === "dragging" ||
-      interactionRef.current.mode === "resizing" ||
-      interactionRef.current.mode === "resizing-group"
+      (interactionRef.current.mode === "dragging" ||
+        interactionRef.current.mode === "resizing" ||
+        interactionRef.current.mode === "resizing-group") &&
+      interactionRef.current.hasMoved
     ) {
       commitElements(
         useBoardStore.getState().elements,
