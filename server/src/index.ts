@@ -96,8 +96,14 @@ async function start() {
   const io = new Server(server, {
     cors: corsOptions,
     maxHttpBufferSize: 5e6,
-    pingInterval: 2500, // Send ping every 2.5s for fast presence heartbeats
-    pingTimeout: 3000   // Disconnect dropped clients in 3s (was 20s+)
+    // Heartbeat must survive a busy event loop. These were 2500/3000, which
+    // meant a 3 s stall (large board autosave, slow Mongo, CPU-starved free
+    // instance, background-tab timer throttling) silently killed the socket —
+    // and with it all live collaboration, until the user reloaded the page.
+    // Presence does NOT depend on this: clients poll `request-presence`
+    // themselves, so a slow heartbeat costs nothing in freshness.
+    pingInterval: 25000,
+    pingTimeout: 20000
   });
 
   io.on("connection", (socket) => {

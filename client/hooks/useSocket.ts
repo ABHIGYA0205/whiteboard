@@ -77,6 +77,14 @@ export function useSocket(boardId: string) {
       activeSocket = io(getSocketUrl(), {
         autoConnect: true,
         transports: ["polling", "websocket"],
+        // Never give up: a dropped socket used to end live collaboration for
+        // the rest of the session. Come back fast, and forever.
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 300,
+        reconnectionDelayMax: 2000,
+        randomizationFactor: 0.3,
+        timeout: 20000,
         auth: {
           userId: localId,
           name: storedName || undefined
@@ -93,16 +101,22 @@ export function useSocket(boardId: string) {
       // Reconnect / state sync (A2.4)
       const handleBoardState = ({
         elements,
-        version
+        version,
+        deletedIds
       }: {
         boardId: string;
         elements: WhiteboardElement[];
-        version: number;
+        version?: number;
+        deletedIds?: string[];
       }) => {
         const localVersion = useBoardStore.getState().version;
-        if (version >= localVersion) {
-          syncElements(elements, version);
-        }
+        // Union merge (never drops local work) + tombstones, and never let the
+        // autosave version move backwards.
+        mergeRemoteElements(
+          elements,
+          deletedIds,
+          version === undefined ? undefined : Math.max(version, localVersion)
+        );
       };
 
       const handleDraw = ({ element }: DrawEventPayload) => {

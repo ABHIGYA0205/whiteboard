@@ -40,6 +40,79 @@ function getUserColor(userId: string): string {
 // Track presence: boardId -> Map<socketId, PresenceUser>
 const roomUsers = new Map<string, Map<string, PresenceUser>>();
 
+// Live, in-memory view of each board. `draw`/`update-element` are relayed but
+// not persisted (Mongo only sees the client's 4 s autosave), so a client that
+// reconnects in between used to receive a board that was seconds stale — the
+// stroke you were watching simply vanished until the next autosave. Keep the
+// authoritative live copy here instead.
+const liveElements = new Map<string, Map<string, WhiteboardElement>>();
+const liveTombstones = new Map<string, Set<string>>();
+
+function liveBoard(boardId: string): Map<string, WhiteboardElement> {
+  let board = liveElements.get(boardId);
+  if (!board) {
+    board = new Map();
+    liveElements.set(boardId, board);
+  }
+  return board;
+}
+
+function recordElement(boardId: string, element: WhiteboardElement) {
+  if (!element?.id) return;
+  liveBoard(boardId).set(element.id, element);
+  liveTombstones.get(boardId)?.delete(element.id);
+}
+
+function recordElements(boardId: string, elements: WhiteboardElement[]) {
+  const board = liveBoard(boardId);
+  for (const element of elements) {
+    if (element?.id) board.set(element.id, element);
+  }
+}
+
+function recordDeleted(boardId: string, ids: string[]) {
+  if (ids.length === 0) return;
+  const board = liveBoard(boardId);
+  let tombstones = liveTombstones.get(boardId);
+  if (!tombstones) {
+    tombstones = new Set();
+    liveTombstones.set(boardId, tombstones);
+  }
+  for (const id of ids) {
+    board.delete(id);
+    tombstones.add(id);
+  }
+}
+
+function forgetBoard(boardId: string) {
+  liveElements.delete(boardId);
+  liveTombstones.delete(boardId);
+}
+
+/** Board state for a (re)joining client: durable state + anything newer that is
+ *  still only in memory, minus tombstones. */
+async function snapshotFor(boardId: string) {
+  const board = await getBoard(boardId);
+  const merged = new Map<string, WhiteboardElement>();
+  for (const element of board?.elements ?? []) merged.set(element.id, element);
+
+  const live = liveElements.get(boardId);
+  if (live) {
+    for (const [id, element] of live) merged.set(id, element);
+  }
+
+  const tombstones = liveTombstones.get(boardId);
+  if (tombstones) {
+    for (const id of tombstones) merged.delete(id);
+  }
+
+  return {
+    version: board?.version ?? 0,
+    elements: Array.from(merged.values()),
+    deletedIds: Array.from(tombstones ?? [])
+  };
+}
+
 export function registerBoardSocket(io: Server, socket: Socket) {
   const userId = getUserId(socket);
   const userColor = getUserColor(userId);
@@ -104,14 +177,13 @@ export function registerBoardSocket(io: Server, socket: Socket) {
 
     // Provide latest authoritative board state on join/reconnect
     try {
-      const board = await getBoard(boardId);
-      if (board) {
-        socket.emit("board:state", {
-          boardId,
-          version: board.version,
-          elements: board.elements
-        });
-      }
+      const snapshot = await snapshotFor(boardId);
+      socket.emit("board:state", {
+        boardId,
+        version: snapshot.version,
+        elements: snapshot.elements,
+        deletedIds: snapshot.deletedIds
+      });
     } catch {
       // ignore
     }
@@ -137,14 +209,13 @@ export function registerBoardSocket(io: Server, socket: Socket) {
       });
     }
     try {
-      const board = await getBoard(boardId);
-      if (board) {
-        socket.emit("board:state", {
-          boardId,
-          version: board.version,
-          elements: board.elements
-        });
-      }
+      const snapshot = await snapshotFor(boardId);
+      socket.emit("board:state", {
+        boardId,
+        version: snapshot.version,
+        elements: snapshot.elements,
+        deletedIds: snapshot.deletedIds
+      });
     } catch {
       // ignore
     }
@@ -186,12 +257,14 @@ export function registerBoardSocket(io: Server, socket: Socket) {
   socket.on("draw", ({ boardId, element }) => {
     if (socket.data.isViewer) return;
     if (!boardId || !element) return;
+    recordElement(boardId, element);
     socket.to(boardId).emit("draw", { boardId, element });
   });
 
   socket.on("update-element", ({ boardId, element }) => {
     if (socket.data.isViewer) return;
     if (!boardId || !element) return;
+    recordElement(boardId, element);
     socket.to(boardId).emit("update-element", { boardId, element });
   });
 
@@ -234,6 +307,9 @@ export function registerBoardSocket(io: Server, socket: Socket) {
   socket.on("clear-board", async ({ boardId }: { boardId: string }) => {
     if (socket.data.isViewer) return;
     if (!boardId) return;
+    // Everything currently known becomes a tombstone, so a reconnecting client
+    // cannot resurrect the pre-clear board from its own copy.
+    recordDeleted(boardId, Array.from(liveBoard(boardId).keys()));
     socket.to(boardId).emit("clear-board");
     try {
       const updated = await updateBoard(boardId, []);
@@ -250,6 +326,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
   socket.on("delete-board", async ({ boardId }: { boardId: string }) => {
     if (socket.data.isViewer) return;
     if (!boardId) return;
+    forgetBoard(boardId);
     socket.to(boardId).emit("board-deleted", { boardId });
     try {
       await deleteBoard(boardId);
@@ -260,7 +337,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
 
   socket.on(
     "replace-elements",
-    async ({
+    ({
       boardId,
       elements,
       version,
@@ -274,27 +351,36 @@ export function registerBoardSocket(io: Server, socket: Socket) {
       if (socket.data.isViewer) return;
       if (!boardId || !Array.isArray(elements)) return;
       const tombstones = Array.isArray(deletedIds) ? deletedIds : [];
-      try {
-        const updated = await updateBoard(
-          boardId,
-          elements as WhiteboardElement[],
-          undefined,
-          tombstones
-        );
-        io.to(boardId).emit("replace-elements", {
-          boardId,
-          elements: updated.elements,
-          version: updated.version,
-          deletedIds: updated.deletedElementIds || tombstones
+      recordElements(boardId, elements as WhiteboardElement[]);
+      recordDeleted(boardId, tombstones);
+
+      // Broadcast BEFORE persisting. Receivers union-merge this payload (it can
+      // only add/update, and deletions travel as tombstones), so reflecting it
+      // immediately is safe — and it keeps peer feedback off the database's
+      // critical path. Previously the whole room waited for a Mongo round trip
+      // before seeing anything, which makes collaborative editing feel laggy.
+      socket.to(boardId).emit("replace-elements", {
+        boardId,
+        elements,
+        deletedIds: tombstones,
+        version: (version ?? 0) + 1
+      });
+
+      // Persist in the background; the sender is not blocked on it.
+      void updateBoard(boardId, elements as WhiteboardElement[], undefined, tombstones)
+        .then((updated) => {
+          // Send the authoritative merged result back to the sender only — it is
+          // the client that needs the resulting version number for autosave.
+          socket.emit("replace-elements", {
+            boardId,
+            elements: updated.elements,
+            version: updated.version,
+            deletedIds: updated.deletedElementIds || tombstones
+          });
+        })
+        .catch(() => {
+          // Keep the optimistic broadcast; the next autosave repairs storage.
         });
-      } catch {
-        socket.to(boardId).emit("replace-elements", {
-          boardId,
-          elements,
-          deletedIds: tombstones,
-          version: (version ?? 0) + 1
-        });
-      }
     }
   );
 

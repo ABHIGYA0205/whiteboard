@@ -14,6 +14,52 @@ import type { WhiteboardElement } from "./types";
  * behaviour cannot drift apart again.
  */
 
+
+/**
+ * Cheap structural equality for elements. Avoids JSON.stringify on every element
+ * of every incoming snapshot (which is O(points) per element and shows up as lag
+ * on large boards). Covers every persisted field; strokes are compared by point
+ * count + endpoints, which is enough because a partial stroke is always re-sent
+ * with more points on the next event.
+ */
+function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean {
+  if (a === b) return true;
+  if (
+    a.type !== b.type ||
+    a.x !== b.x ||
+    a.y !== b.y ||
+    a.width !== b.width ||
+    a.height !== b.height ||
+    a.strokeColor !== b.strokeColor ||
+    a.strokeWidth !== b.strokeWidth ||
+    a.strokeStyle !== b.strokeStyle ||
+    a.fillColor !== b.fillColor ||
+    a.fillStyle !== b.fillStyle ||
+    a.roughness !== b.roughness ||
+    a.roundness !== b.roundness ||
+    a.opacity !== b.opacity ||
+    a.text !== b.text ||
+    a.fontSize !== b.fontSize ||
+    a.imageUrl !== b.imageUrl ||
+    a.isLocked !== b.isLocked
+  ) {
+    return false;
+  }
+
+  if ((a.startBinding?.elementId ?? null) !== (b.startBinding?.elementId ?? null)) return false;
+  if ((a.endBinding?.elementId ?? null) !== (b.endBinding?.elementId ?? null)) return false;
+
+  const ap = a.points ?? [];
+  const bp = b.points ?? [];
+  if (ap.length !== bp.length) return false;
+  if (ap.length > 0) {
+    const afl = ap[0], bfl = bp[0];
+    const alp = ap[ap.length - 1], blp = bp[bp.length - 1];
+    if (afl.x !== bfl.x || afl.y !== bfl.y || alp.x !== blp.x || alp.y !== blp.y) return false;
+  }
+  return true;
+}
+
 export type MergeInput = {
   /** Current local element list (source of truth for "don't lose my work"). */
   local: WhiteboardElement[];
@@ -91,7 +137,7 @@ export function mergeElementLists({
     const lastLocalEdit = localEditTimes?.get(remote.id) ?? 0;
     if (now - lastLocalEdit < graceMs) continue;
 
-    if (JSON.stringify(existing) !== JSON.stringify(remote)) {
+    if (!sameElement(existing, remote)) {
       byId.set(remote.id, remote);
       changed = true;
     }

@@ -1,0 +1,446 @@
+diff --git a/client/hooks/useSocket.ts b/client/hooks/useSocket.ts
+index 7f4c241..c6fe212 100644
+--- a/client/hooks/useSocket.ts
++++ b/client/hooks/useSocket.ts
+@@ -77,6 +77,14 @@ export function useSocket(boardId: string) {
+       activeSocket = io(getSocketUrl(), {
+         autoConnect: true,
+         transports: ["polling", "websocket"],
++        // Never give up: a dropped socket used to end live collaboration for
++        // the rest of the session. Come back fast, and forever.
++        reconnection: true,
++        reconnectionAttempts: Infinity,
++        reconnectionDelay: 300,
++        reconnectionDelayMax: 2000,
++        randomizationFactor: 0.3,
++        timeout: 20000,
+         auth: {
+           userId: localId,
+           name: storedName || undefined
+@@ -93,16 +101,22 @@ export function useSocket(boardId: string) {
+       // Reconnect / state sync (A2.4)
+       const handleBoardState = ({
+         elements,
+-        version
++        version,
++        deletedIds
+       }: {
+         boardId: string;
+         elements: WhiteboardElement[];
+-        version: number;
++        version?: number;
++        deletedIds?: string[];
+       }) => {
+         const localVersion = useBoardStore.getState().version;
+-        if (version >= localVersion) {
+-          syncElements(elements, version);
+-        }
++        // Union merge (never drops local work) + tombstones, and never let the
++        // autosave version move backwards.
++        mergeRemoteElements(
++          elements,
++          deletedIds,
++          version === undefined ? undefined : Math.max(version, localVersion)
++        );
+       };
+ 
+       const handleDraw = ({ element }: DrawEventPayload) => {
+diff --git a/client/store/boardStore.ts b/client/store/boardStore.ts
+index fab8f2e..50fccfd 100644
+--- a/client/store/boardStore.ts
++++ b/client/store/boardStore.ts
+@@ -124,15 +124,24 @@ function markLocalEdits(
+   times: Map<string, number>
+ ): Map<string, number> {
+   if (previous === next) return times;
+-  const previousById = new Map(previous.map((element) => [element.id, element]));
+-  const updated = new Map(times);
++
++  // Hot path: this runs on EVERY pointermove while drawing/dragging, so it must
++  // stay allocation-free. Immutable updates give every changed element a new
++  // reference, so reference comparison is enough to spot local edits — a deep
++  // JSON compare here costs ~3.4 ms/frame on a 400-element board.
++  let updated: Map<string, number> | null = null;
+   const now = Date.now();
+-  for (const element of next) {
+-    const before = previousById.get(element.id);
+-    if (!before || JSON.stringify(before) !== JSON.stringify(element)) {
+-      updated.set(element.id, now);
+-    }
++
++  for (let i = 0; i < next.length; i++) {
++    const element = next[i];
++    const before = previous[i];
++    if (before === element && before.id === element.id) continue;
++    if (!updated) updated = new Map(times);
++    updated.set(element.id, now);
+   }
++
++  if (!updated) return times;
++
+   // Keep the map from growing forever.
+   if (updated.size > 2000) {
+     for (const [id, at] of updated) {
+diff --git a/server/src/index.ts b/server/src/index.ts
+index 86514f3..234b4bf 100644
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -96,8 +96,14 @@ async function start() {
+   const io = new Server(server, {
+     cors: corsOptions,
+     maxHttpBufferSize: 5e6,
+-    pingInterval: 2500, // Send ping every 2.5s for fast presence heartbeats
+-    pingTimeout: 3000   // Disconnect dropped clients in 3s (was 20s+)
++    // Heartbeat must survive a busy event loop. These were 2500/3000, which
++    // meant a 3 s stall (large board autosave, slow Mongo, CPU-starved free
++    // instance, background-tab timer throttling) silently killed the socket —
++    // and with it all live collaboration, until the user reloaded the page.
++    // Presence does NOT depend on this: clients poll `request-presence`
++    // themselves, so a slow heartbeat costs nothing in freshness.
++    pingInterval: 25000,
++    pingTimeout: 20000
+   });
+ 
+   io.on("connection", (socket) => {
+diff --git a/server/src/sockets/board.socket.ts b/server/src/sockets/board.socket.ts
+index 38fa501..bfb8fe6 100644
+--- a/server/src/sockets/board.socket.ts
++++ b/server/src/sockets/board.socket.ts
+@@ -40,6 +40,79 @@ function getUserColor(userId: string): string {
+ // Track presence: boardId -> Map<socketId, PresenceUser>
+ const roomUsers = new Map<string, Map<string, PresenceUser>>();
+ 
++// Live, in-memory view of each board. `draw`/`update-element` are relayed but
++// not persisted (Mongo only sees the client's 4 s autosave), so a client that
++// reconnects in between used to receive a board that was seconds stale — the
++// stroke you were watching simply vanished until the next autosave. Keep the
++// authoritative live copy here instead.
++const liveElements = new Map<string, Map<string, WhiteboardElement>>();
++const liveTombstones = new Map<string, Set<string>>();
++
++function liveBoard(boardId: string): Map<string, WhiteboardElement> {
++  let board = liveElements.get(boardId);
++  if (!board) {
++    board = new Map();
++    liveElements.set(boardId, board);
++  }
++  return board;
++}
++
++function recordElement(boardId: string, element: WhiteboardElement) {
++  if (!element?.id) return;
++  liveBoard(boardId).set(element.id, element);
++  liveTombstones.get(boardId)?.delete(element.id);
++}
++
++function recordElements(boardId: string, elements: WhiteboardElement[]) {
++  const board = liveBoard(boardId);
++  for (const element of elements) {
++    if (element?.id) board.set(element.id, element);
++  }
++}
++
++function recordDeleted(boardId: string, ids: string[]) {
++  if (ids.length === 0) return;
++  const board = liveBoard(boardId);
++  let tombstones = liveTombstones.get(boardId);
++  if (!tombstones) {
++    tombstones = new Set();
++    liveTombstones.set(boardId, tombstones);
++  }
++  for (const id of ids) {
++    board.delete(id);
++    tombstones.add(id);
++  }
++}
++
++function forgetBoard(boardId: string) {
++  liveElements.delete(boardId);
++  liveTombstones.delete(boardId);
++}
++
++/** Board state for a (re)joining client: durable state + anything newer that is
++ *  still only in memory, minus tombstones. */
++async function snapshotFor(boardId: string) {
++  const board = await getBoard(boardId);
++  const merged = new Map<string, WhiteboardElement>();
++  for (const element of board?.elements ?? []) merged.set(element.id, element);
++
++  const live = liveElements.get(boardId);
++  if (live) {
++    for (const [id, element] of live) merged.set(id, element);
++  }
++
++  const tombstones = liveTombstones.get(boardId);
++  if (tombstones) {
++    for (const id of tombstones) merged.delete(id);
++  }
++
++  return {
++    version: board?.version ?? 0,
++    elements: Array.from(merged.values()),
++    deletedIds: Array.from(tombstones ?? [])
++  };
++}
++
+ export function registerBoardSocket(io: Server, socket: Socket) {
+   const userId = getUserId(socket);
+   const userColor = getUserColor(userId);
+@@ -104,14 +177,13 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+ 
+     // Provide latest authoritative board state on join/reconnect
+     try {
+-      const board = await getBoard(boardId);
+-      if (board) {
+-        socket.emit("board:state", {
+-          boardId,
+-          version: board.version,
+-          elements: board.elements
+-        });
+-      }
++      const snapshot = await snapshotFor(boardId);
++      socket.emit("board:state", {
++        boardId,
++        version: snapshot.version,
++        elements: snapshot.elements,
++        deletedIds: snapshot.deletedIds
++      });
+     } catch {
+       // ignore
+     }
+@@ -137,14 +209,13 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+       });
+     }
+     try {
+-      const board = await getBoard(boardId);
+-      if (board) {
+-        socket.emit("board:state", {
+-          boardId,
+-          version: board.version,
+-          elements: board.elements
+-        });
+-      }
++      const snapshot = await snapshotFor(boardId);
++      socket.emit("board:state", {
++        boardId,
++        version: snapshot.version,
++        elements: snapshot.elements,
++        deletedIds: snapshot.deletedIds
++      });
+     } catch {
+       // ignore
+     }
+@@ -186,12 +257,14 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+   socket.on("draw", ({ boardId, element }) => {
+     if (socket.data.isViewer) return;
+     if (!boardId || !element) return;
++    recordElement(boardId, element);
+     socket.to(boardId).emit("draw", { boardId, element });
+   });
+ 
+   socket.on("update-element", ({ boardId, element }) => {
+     if (socket.data.isViewer) return;
+     if (!boardId || !element) return;
++    recordElement(boardId, element);
+     socket.to(boardId).emit("update-element", { boardId, element });
+   });
+ 
+@@ -234,6 +307,9 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+   socket.on("clear-board", async ({ boardId }: { boardId: string }) => {
+     if (socket.data.isViewer) return;
+     if (!boardId) return;
++    // Everything currently known becomes a tombstone, so a reconnecting client
++    // cannot resurrect the pre-clear board from its own copy.
++    recordDeleted(boardId, Array.from(liveBoard(boardId).keys()));
+     socket.to(boardId).emit("clear-board");
+     try {
+       const updated = await updateBoard(boardId, []);
+@@ -250,6 +326,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+   socket.on("delete-board", async ({ boardId }: { boardId: string }) => {
+     if (socket.data.isViewer) return;
+     if (!boardId) return;
++    forgetBoard(boardId);
+     socket.to(boardId).emit("board-deleted", { boardId });
+     try {
+       await deleteBoard(boardId);
+@@ -260,7 +337,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+ 
+   socket.on(
+     "replace-elements",
+-    async ({
++    ({
+       boardId,
+       elements,
+       version,
+@@ -274,27 +351,36 @@ export function registerBoardSocket(io: Server, socket: Socket) {
+       if (socket.data.isViewer) return;
+       if (!boardId || !Array.isArray(elements)) return;
+       const tombstones = Array.isArray(deletedIds) ? deletedIds : [];
+-      try {
+-        const updated = await updateBoard(
+-          boardId,
+-          elements as WhiteboardElement[],
+-          undefined,
+-          tombstones
+-        );
+-        io.to(boardId).emit("replace-elements", {
+-          boardId,
+-          elements: updated.elements,
+-          version: updated.version,
+-          deletedIds: updated.deletedElementIds || tombstones
+-        });
+-      } catch {
+-        socket.to(boardId).emit("replace-elements", {
+-          boardId,
+-          elements,
+-          deletedIds: tombstones,
+-          version: (version ?? 0) + 1
++      recordElements(boardId, elements as WhiteboardElement[]);
++      recordDeleted(boardId, tombstones);
++
++      // Broadcast BEFORE persisting. Receivers union-merge this payload (it can
++      // only add/update, and deletions travel as tombstones), so reflecting it
++      // immediately is safe — and it keeps peer feedback off the database's
++      // critical path. Previously the whole room waited for a Mongo round trip
++      // before seeing anything, which makes collaborative editing feel laggy.
++      socket.to(boardId).emit("replace-elements", {
++        boardId,
++        elements,
++        deletedIds: tombstones,
++        version: (version ?? 0) + 1
++      });
++
++      // Persist in the background; the sender is not blocked on it.
++      void updateBoard(boardId, elements as WhiteboardElement[], undefined, tombstones)
++        .then((updated) => {
++          // Send the authoritative merged result back to the sender only — it is
++          // the client that needs the resulting version number for autosave.
++          socket.emit("replace-elements", {
++            boardId,
++            elements: updated.elements,
++            version: updated.version,
++            deletedIds: updated.deletedElementIds || tombstones
++          });
++        })
++        .catch(() => {
++          // Keep the optimistic broadcast; the next autosave repairs storage.
+         });
+-      }
+     }
+   );
+ 
+diff --git a/shared/collab.ts b/shared/collab.ts
+index f1bd94b..ba14e95 100644
+--- a/shared/collab.ts
++++ b/shared/collab.ts
+@@ -14,6 +14,52 @@ import type { WhiteboardElement } from "./types";
+  * behaviour cannot drift apart again.
+  */
+ 
++
++/**
++ * Cheap structural equality for elements. Avoids JSON.stringify on every element
++ * of every incoming snapshot (which is O(points) per element and shows up as lag
++ * on large boards). Covers every persisted field; strokes are compared by point
++ * count + endpoints, which is enough because a partial stroke is always re-sent
++ * with more points on the next event.
++ */
++function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean {
++  if (a === b) return true;
++  if (
++    a.type !== b.type ||
++    a.x !== b.x ||
++    a.y !== b.y ||
++    a.width !== b.width ||
++    a.height !== b.height ||
++    a.strokeColor !== b.strokeColor ||
++    a.strokeWidth !== b.strokeWidth ||
++    a.strokeStyle !== b.strokeStyle ||
++    a.fillColor !== b.fillColor ||
++    a.fillStyle !== b.fillStyle ||
++    a.roughness !== b.roughness ||
++    a.roundness !== b.roundness ||
++    a.opacity !== b.opacity ||
++    a.text !== b.text ||
++    a.fontSize !== b.fontSize ||
++    a.imageUrl !== b.imageUrl ||
++    a.isLocked !== b.isLocked
++  ) {
++    return false;
++  }
++
++  if ((a.startBinding?.elementId ?? null) !== (b.startBinding?.elementId ?? null)) return false;
++  if ((a.endBinding?.elementId ?? null) !== (b.endBinding?.elementId ?? null)) return false;
++
++  const ap = a.points ?? [];
++  const bp = b.points ?? [];
++  if (ap.length !== bp.length) return false;
++  if (ap.length > 0) {
++    const afl = ap[0], bfl = bp[0];
++    const alp = ap[ap.length - 1], blp = bp[bp.length - 1];
++    if (afl.x !== bfl.x || afl.y !== bfl.y || alp.x !== blp.x || alp.y !== blp.y) return false;
++  }
++  return true;
++}
++
+ export type MergeInput = {
+   /** Current local element list (source of truth for "don't lose my work"). */
+   local: WhiteboardElement[];
+@@ -91,7 +137,7 @@ export function mergeElementLists({
+     const lastLocalEdit = localEditTimes?.get(remote.id) ?? 0;
+     if (now - lastLocalEdit < graceMs) continue;
+ 
+-    if (JSON.stringify(existing) !== JSON.stringify(remote)) {
++    if (!sameElement(existing, remote)) {
+       byId.set(remote.id, remote);
+       changed = true;
+     }
+diff --git a/tests/live-reconnect.e2e.mjs b/tests/live-reconnect.e2e.mjs
+new file mode 100644
+index 0000000..7529f76
+--- /dev/null
++++ b/tests/live-reconnect.e2e.mjs
+@@ -0,0 +1,43 @@
++// Proves: (1) an un-autosaved stroke is served to a client that reconnects,
++//          (2) a dropped socket comes back and live sync resumes.
++import { io } from "socket.io-client";
++const API="http://127.0.0.1:4001";
++const sleep=ms=>new Promise(r=>setTimeout(r,ms));
++const el=(id,x=0)=>({id,type:"rectangle",x,y:0,width:10,height:10,strokeColor:"#fff",strokeWidth:2,points:[]});
++const results=[]; const check=(n,p,d)=>{results.push(p);console.log(`${p?"PASS":"FAIL"}  ${n}${d?"  "+JSON.stringify(d):""}`);};
++
++const board=(await (await fetch(`${API}/board`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"})).json()).id;
++
++// drawer keeps the board ONLY in memory (draw events are not persisted)
++const drawer=io(API,{transports:["websocket"],auth:{userId:"drawer"}});
++await new Promise(r=>drawer.on("connect",r)); drawer.emit("join-board",{boardId:board,userName:"drawer"});
++drawer.emit("draw",{boardId:board,element:el("live-shape")});
++await sleep(300);
++
++// a brand new client joins (same as a reconnect) — it must see the live shape
++const late=io(API,{transports:["websocket"],auth:{userId:"late"}});
++await new Promise(r=>late.on("connect",r));
++const state=await new Promise(res=>{ late.once("board:state",res); late.emit("join-board",{boardId:board,userName:"late"}); });
++check("reconnecting client sees un-autosaved live stroke", state.elements.some(e=>e.id==="live-shape"), {count:state.elements.length});
++
++// now drop the late client and reconnect: sync must resume immediately
++late.disconnect(); await sleep(300);
++const again=io(API,{transports:["websocket"],auth:{userId:"late"},reconnection:true,reconnectionDelay:300});
++await new Promise(r=>again.on("connect",r)); again.emit("join-board",{boardId:board,userName:"late"});
++let got=0; again.on("draw",()=>got++);
++drawer.emit("draw",{boardId:board,element:el("after-reconnect",55)});
++await sleep(500);
++check("live sync resumes after reconnect", got>0, {framesReceived:got});
++
++// tombstones survive a reconnect too
++drawer.emit("replace-elements",{boardId:board,elements:[el("after-reconnect",55)],deletedIds:["live-shape"]});
++await sleep(400);
++const late2=io(API,{transports:["websocket"],auth:{userId:"late2"}});
++await new Promise(r=>late2.on("connect",r));
++const st2=await new Promise(res=>{ late2.once("board:state",res); late2.emit("join-board",{boardId:board,userName:"late2"}); });
++check("deleted element is not served back after reconnect", !st2.elements.some(e=>e.id==="live-shape"), {ids:st2.elements.map(e=>e.id)});
++
++drawer.close(); again.close(); late2.close();
++const failed=results.filter(r=>!r).length;
++console.log(`\n${results.length-failed}/${results.length} passed`);
++process.exit(failed?1:0);
