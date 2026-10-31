@@ -260,20 +260,38 @@ export function registerBoardSocket(io: Server, socket: Socket) {
 
   socket.on(
     "replace-elements",
-    async ({ boardId, elements, version }: { boardId: string; elements: unknown[]; version?: number }) => {
+    async ({
+      boardId,
+      elements,
+      version,
+      deletedIds
+    }: {
+      boardId: string;
+      elements: unknown[];
+      version?: number;
+      deletedIds?: string[];
+    }) => {
       if (socket.data.isViewer) return;
       if (!boardId || !Array.isArray(elements)) return;
+      const tombstones = Array.isArray(deletedIds) ? deletedIds : [];
       try {
-        const updated = await updateBoard(boardId, elements as WhiteboardElement[]);
+        const updated = await updateBoard(
+          boardId,
+          elements as WhiteboardElement[],
+          undefined,
+          tombstones
+        );
         io.to(boardId).emit("replace-elements", {
           boardId,
           elements: updated.elements,
-          version: updated.version
+          version: updated.version,
+          deletedIds: updated.deletedElementIds || tombstones
         });
       } catch {
         socket.to(boardId).emit("replace-elements", {
           boardId,
           elements,
+          deletedIds: tombstones,
           version: (version ?? 0) + 1
         });
       }

@@ -9,6 +9,7 @@ import type {
   Point
 } from "@shared/types";
 import { create } from "zustand";
+import { mergeElementLists } from "@shared/collab";
 
 type StoredCursor = CursorPosition & { lastSeen: number };
 
@@ -35,6 +36,9 @@ type BoardState = {
   roundness: boolean;
   opacity: number;
   deletedElementIds: Set<string>;
+  localEditTimes: Map<string, number>;
+  /** Elements the local user is actively drawing/dragging right now. */
+  activeElementIds: Set<string>;
   selectedElementId: string | null;
   selectedElementIds: string[];
   editingElementId: string | null;
@@ -71,6 +75,12 @@ type BoardState = {
   loadBoard: (elements: WhiteboardElement[], version?: number) => void;
   replaceElements: (elements: WhiteboardElement[]) => void;
   syncElements: (elements: WhiteboardElement[], version?: number) => void;
+  /** Union-merge a remote snapshot. Never deletes local work unless tombstoned. */
+  mergeRemoteElements: (elements: WhiteboardElement[], deletedIds?: string[], version?: number) => void;
+  /** Marks the element(s) currently under the local pointer. */
+  setActiveElementIds: (ids: string[]) => void;
+  /** Apply a remote "clear board" without letting old elements merge back in. */
+  applyRemoteClear: () => void;
   selectElement: (id: string | null | string[]) => void;
   deleteSelected: () => WhiteboardElement[] | null;
   copySelected: () => void;
@@ -102,6 +112,36 @@ type BoardState = {
   clearExpiredLaserPoints: () => void;
 };
 
+const LOCAL_EDIT_GRACE_MS = 600;
+
+/**
+ * Records which elements the local user just touched, so an incoming snapshot
+ * that is a few hundred ms stale cannot revert a shape they are still moving.
+ */
+function markLocalEdits(
+  previous: WhiteboardElement[],
+  next: WhiteboardElement[],
+  times: Map<string, number>
+): Map<string, number> {
+  if (previous === next) return times;
+  const previousById = new Map(previous.map((element) => [element.id, element]));
+  const updated = new Map(times);
+  const now = Date.now();
+  for (const element of next) {
+    const before = previousById.get(element.id);
+    if (!before || JSON.stringify(before) !== JSON.stringify(element)) {
+      updated.set(element.id, now);
+    }
+  }
+  // Keep the map from growing forever.
+  if (updated.size > 2000) {
+    for (const [id, at] of updated) {
+      if (now - at > LOCAL_EDIT_GRACE_MS * 10) updated.delete(id);
+    }
+  }
+  return updated;
+}
+
 export const useBoardStore = create<BoardState>((set, get) => ({
   elements: [],
   history: [],
@@ -118,6 +158,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   roundness: false,
   opacity: 1,
   deletedElementIds: new Set<string>(),
+  localEditTimes: new Map<string, number>(),
+  activeElementIds: new Set<string>(),
   selectedElementId: null,
   selectedElementIds: [],
   editingElementId: null,
@@ -224,10 +266,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       };
     }),
   setEditingElementId: (editingElementId) => set({ editingElementId }),
-  setElements: (elements) => set({ elements }),
+  setElements: (elements) =>
+    set((state) => ({
+      elements,
+      localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes)
+    })),
   commitElements: (elements, previousElements) =>
     set((state) => ({
       elements,
+      localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes),
       history: [...state.history, previousElements ?? state.elements],
       future: []
     })),
@@ -237,6 +284,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       version,
       history: [],
       future: [],
+      // A fresh authoritative load is the only place tombstones may be dropped.
+      deletedElementIds: new Set<string>(),
+      localEditTimes: new Map<string, number>(),
+  activeElementIds: new Set<string>(),
       selectedElementId: null,
       selectedElementIds: []
     }),
@@ -247,29 +298,25 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       future: []
     })),
   syncElements: (incomingElements, version) =>
+    // Backwards-compatible alias: this used to REPLACE the whole board, which
+    // silently deleted anything the sender did not know about (a peer's newer
+    // stroke, or the stroke you were drawing at that moment). It now merges.
+    get().mergeRemoteElements(incomingElements, undefined, version),
+  mergeRemoteElements: (incomingElements, deletedIds, version) =>
     set((state) => {
-      const activeEditId = state.editingElementId;
-      const remoteMap = new Map(incomingElements.map((el) => [el.id, el]));
+      const { elements, changed, tombstones } = mergeElementLists({
+        local: state.elements,
+        incoming: incomingElements,
+        deletedIds,
+        localTombstones: state.deletedElementIds,
+        localEditTimes: state.localEditTimes,
+        editingElementId: state.editingElementId,
+        activeElementIds: state.activeElementIds,
+        graceMs: LOCAL_EDIT_GRACE_MS
+      });
 
-      const nextElements = incomingElements
-        .filter((remoteEl) => !state.deletedElementIds.has(remoteEl.id))
-        .map((remoteEl) => {
-          if (remoteEl.id === activeEditId) {
-            const localActive = state.elements.find((e) => e.id === activeEditId);
-            return localActive || remoteEl;
-          }
-          return remoteEl;
-        });
-
-      if (activeEditId && !remoteMap.has(activeEditId) && !state.deletedElementIds.has(activeEditId)) {
-        const localActive = state.elements.find((e) => e.id === activeEditId);
-        if (localActive) {
-          nextElements.push(localActive);
-        }
-      }
-
-      // Preserve selection: retain selected element IDs that still exist in nextElements
-      const nextIdSet = new Set(nextElements.map((el) => el.id));
+      // Preserve selection: retain selected element IDs that still exist.
+      const nextIdSet = new Set(elements.map((el) => el.id));
       const currentSelected = state.selectedElementIds.length > 0
         ? state.selectedElementIds
         : (state.selectedElementId ? [state.selectedElementId] : []);
@@ -278,11 +325,39 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         ? state.selectedElementId
         : retainedSelectedIds[0] ?? null;
 
+      if (!changed && version === undefined && tombstones.size === state.deletedElementIds.size) {
+        return state;
+      }
+
       return {
-        elements: nextElements,
+        elements,
+        deletedElementIds: tombstones,
         ...(version !== undefined ? { version } : {}),
         selectedElementId: retainedSelectedId,
         selectedElementIds: retainedSelectedIds
+      };
+    }),
+  setActiveElementIds: (ids) =>
+    set((state) => {
+      if (
+        ids.length === state.activeElementIds.size &&
+        ids.every((id) => state.activeElementIds.has(id))
+      ) {
+        return state;
+      }
+      return { activeElementIds: new Set(ids) };
+    }),
+  applyRemoteClear: () =>
+    set((state) => {
+      const tombstones = new Set(state.deletedElementIds);
+      state.elements.forEach((element) => tombstones.add(element.id));
+      return {
+        elements: [],
+        deletedElementIds: tombstones,
+        selectedElementId: null,
+        selectedElementIds: [],
+        editingElementId: null,
+        activeElementIds: new Set<string>()
       };
     }),
   selectElement: (payload) =>
@@ -503,8 +578,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const previous = state.history[state.history.length - 1];
       if (!previous) return state;
       updated = previous;
+      const tombstones = new Set(state.deletedElementIds);
+      previous.forEach((element) => tombstones.delete(element.id));
       return {
         elements: previous,
+        deletedElementIds: tombstones,
+        localEditTimes: markLocalEdits(state.elements, previous, state.localEditTimes),
         history: state.history.slice(0, -1),
         future: [state.elements, ...state.future]
       };
@@ -517,8 +596,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const [next, ...remaining] = state.future;
       if (!next) return state;
       updated = next;
+      const tombstones = new Set(state.deletedElementIds);
+      next.forEach((element) => tombstones.delete(element.id));
       return {
         elements: next,
+        deletedElementIds: tombstones,
+        localEditTimes: markLocalEdits(state.elements, next, state.localEditTimes),
         history: [...state.history, state.elements],
         future: remaining
       };
@@ -530,6 +613,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setZoom: (zoom) => set((state) => ({ viewport: { ...state.viewport, zoom } })),
   upsertRemoteElement: (element) =>
     set((state) => {
+      // Never resurrect something this board already deleted.
+      if (state.deletedElementIds.has(element.id)) {
+        return state;
+      }
       // If local user is actively typing in this element, preserve local text
       if (state.editingElementId === element.id) {
         return state;
@@ -630,3 +717,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       return valid.length !== state.laserPoints.length ? { laserPoints: valid } : state;
     })
 }));
+
+// Dev-only inspection hook (never shipped to production builds): makes the
+// live board state readable from the console/tests while debugging sync.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as unknown as { __boardStore?: typeof useBoardStore }).__boardStore = useBoardStore;
+}

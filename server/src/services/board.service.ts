@@ -26,6 +26,7 @@ function toBoardDocument(doc: any): BoardDocument {
     ownerId: doc.ownerId,
     shareToken: doc.shareToken,
     backgroundColor: doc.backgroundColor || "",
+    deletedElementIds: doc.deletedElementIds || [],
     elements: (doc.elements || []).map((el: any) => ({
       id: el.id,
       type: el.type,
@@ -134,12 +135,40 @@ async function sanitizeElements(elements: WhiteboardElement[]): Promise<Whiteboa
   );
 }
 
+/**
+ * A client save is a full snapshot of *that client's* view, which is always
+ * slightly behind reality: it does not contain the shape a collaborator drew
+ * half a second ago. Blindly $set-ing it therefore erases other people's work.
+ * So an incoming save is applied as "upserts + explicit tombstones": anything
+ * stored that the payload does not mention, and that was not explicitly
+ * deleted, is kept.
+ */
+function mergeForStorage(
+  stored: WhiteboardElement[],
+  incoming: WhiteboardElement[],
+  deletedIds: Iterable<string>
+): { elements: WhiteboardElement[]; deletedElementIds: string[] } {
+  const deleted = new Set<string>(deletedIds);
+  const incomingIds = new Set(incoming.map((element) => element.id));
+
+  const merged = [
+    ...incoming.filter((element) => !deleted.has(element.id)),
+    ...stored.filter(
+      (element) => !incomingIds.has(element.id) && !deleted.has(element.id)
+    )
+  ];
+
+  return { elements: merged, deletedElementIds: Array.from(deleted) };
+}
+
 export async function updateBoard(
   id: string,
   elements: WhiteboardElement[],
-  expectedVersion?: number
+  expectedVersion?: number,
+  deletedIds: Iterable<string> = []
 ): Promise<BoardDocument> {
   const sanitized = await sanitizeElements(elements);
+  const incomingDeleted = Array.from(deletedIds);
 
   if (isMongoConnected()) {
     try {
@@ -149,9 +178,16 @@ export async function updateBoard(
           throw new VersionConflictError(existing.version);
         }
 
+        const stored: any[] = (existing?.elements as any[]) || [];
+        const { elements: mergedElements, deletedElementIds } = mergeForStorage(
+          stored as WhiteboardElement[],
+          sanitized,
+          [...incomingDeleted, ...((existing?.deletedElementIds as string[]) || [])]
+        );
+
         const board: any = await BoardModel.findOneAndUpdate(
           { id, version: expectedVersion },
-          { $set: { elements: sanitized }, $inc: { version: 1 } },
+          { $set: { elements: mergedElements, deletedElementIds }, $inc: { version: 1 } },
           { new: true, runValidators: true }
         ).lean();
 
@@ -178,9 +214,16 @@ export async function updateBoard(
       }
 
       // Without version check, atomic upsert with version increment
+      const existingForMerge: any = await BoardModel.findOne({ id }).lean();
+      const { elements: mergedElements, deletedElementIds } = mergeForStorage(
+        ((existingForMerge?.elements as any[]) || []) as WhiteboardElement[],
+        sanitized,
+        [...incomingDeleted, ...((existingForMerge?.deletedElementIds as string[]) || [])]
+      );
+
       const board: any = await BoardModel.findOneAndUpdate(
         { id },
-        { $set: { elements: sanitized }, $inc: { version: 1 } },
+        { $set: { elements: mergedElements, deletedElementIds }, $inc: { version: 1 } },
         { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
       ).lean();
 
@@ -213,9 +256,16 @@ export async function updateBoard(
     throw new VersionConflictError(currentDoc.version);
   }
 
+  const { elements: mergedElements, deletedElementIds } = mergeForStorage(
+    currentDoc.elements || [],
+    sanitized,
+    [...incomingDeleted, ...((currentDoc.deletedElementIds as string[]) || [])]
+  );
+
   const updatedDoc: BoardDocument = {
     ...currentDoc,
-    elements: sanitized,
+    elements: mergedElements,
+    deletedElementIds,
     version: currentDoc.version + 1,
     updatedAt: new Date().toISOString()
   };
