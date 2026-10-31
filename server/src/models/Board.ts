@@ -47,6 +47,8 @@ const boardSchema = new Schema(
     ownerId: { type: String },
     shareToken: { type: String },
     backgroundColor: { type: String, default: "" },
+    // Tombstones so two concurrent saves cannot resurrect/anihilate each other's work
+    deletedElementIds: { type: [String], default: [] },
     elements: { type: [elementSchema], default: [] }
   },
   {

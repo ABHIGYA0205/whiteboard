@@ -47,6 +47,8 @@ export function useSocket(boardId: string) {
   const addPresenceUser = useBoardStore((state) => state.addPresenceUser);
   const removePresenceUser = useBoardStore((state) => state.removePresenceUser);
   const syncElements = useBoardStore((state) => state.syncElements);
+  const mergeRemoteElements = useBoardStore((state) => state.mergeRemoteElements);
+  const applyRemoteClear = useBoardStore((state) => state.applyRemoteClear);
   const setCurrentUserId = useBoardStore((state) => state.setCurrentUserId);
 
   const socketRef = useRef<Socket | null>(null);
@@ -140,14 +142,23 @@ export function useSocket(boardId: string) {
       };
 
       const handleClear = () => {
-        syncElements([]);
+        // Tombstone everything: a plain [] merge would let peers' stale copies
+        // flow straight back in on the next snapshot.
+        applyRemoteClear();
       };
 
-      const handleReplace = ({ elements, version }: { elements: WhiteboardElement[]; version?: number }) => {
-        const localVersion = useBoardStore.getState().version;
-        if (version === undefined || version >= localVersion) {
-          syncElements(elements, version ?? (localVersion + 1));
-        }
+      const handleReplace = ({
+        elements,
+        version,
+        deletedIds
+      }: {
+        elements: WhiteboardElement[];
+        version?: number;
+        deletedIds?: string[];
+      }) => {
+        // A peer's board snapshot is a set of upserts, never a delete list.
+        // Anything it omits (our newest stroke, our in-flight shape) stays.
+        mergeRemoteElements(elements, deletedIds, version);
       };
 
       const handleBoardDeleted = () => {
@@ -266,6 +277,8 @@ export function useSocket(boardId: string) {
     setPresenceUsers,
     setCurrentUserId,
     syncElements,
+    mergeRemoteElements,
+    applyRemoteClear,
     upsertRemoteCursor,
     upsertRemoteElement
   ]);
@@ -325,8 +338,13 @@ export function useSocket(boardId: string) {
         socketRef.current?.emit("delete-board", { boardId });
       },
       emitReplace(elements: WhiteboardElement[]) {
-        const version = useBoardStore.getState().version;
-        socketRef.current?.emit("replace-elements", { boardId, elements, version });
+        const { version, deletedElementIds } = useBoardStore.getState();
+        socketRef.current?.emit("replace-elements", {
+          boardId,
+          elements,
+          version,
+          deletedIds: Array.from(deletedElementIds)
+        });
       },
       emitLaser(point: { x: number; y: number }, color?: string) {
         socketRef.current?.emit("laser-point", { boardId, point, color });

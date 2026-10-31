@@ -316,6 +316,10 @@ export function useCanvas({
       .reverse()
       .find((element) => hitTestElement(point, element));
 
+    // Tell the collaboration layer which element is under the pointer, so an
+    // incoming snapshot can never revert the shape being dragged/resized now.
+    useBoardStore.getState().setActiveElementIds(activeElement ? [activeElement.id] : []);
+
     if (event.button === 1 || event.button === 2 || (event.shiftKey && tool === "pan") || tool === "pan") {
       interactionRef.current = {
         mode: "panning",
@@ -837,6 +841,7 @@ export function useCanvas({
       }
     }
 
+    useBoardStore.getState().setActiveElementIds([]);
     interactionRef.current = { mode: "idle" };
   };
 

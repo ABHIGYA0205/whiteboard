@@ -55,14 +55,19 @@ export async function updateBoardController(request: Request, response: Response
       return;
     }
 
-    const { elements, version } = request.body;
+    const { elements, version, deletedIds } = request.body;
 
     if (!Array.isArray(elements)) {
       response.status(400).json({ error: "elements array is required." });
       return;
     }
 
-    const board = await updateBoard(boardId, elements, typeof version === "number" ? version : undefined);
+    const board = await updateBoard(
+      boardId,
+      elements,
+      typeof version === "number" ? version : undefined,
+      Array.isArray(deletedIds) ? deletedIds : []
+    );
     response.json(board);
   } catch (error: any) {
     if (error instanceof VersionConflictError) {

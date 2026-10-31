@@ -219,7 +219,8 @@ export default function BoardPage({ params }: BoardPageProps) {
         const updated = await saveBoard(
           boardId,
           latestElementsRef.current,
-          latestVersionRef.current
+          latestVersionRef.current,
+          Array.from(useBoardStore.getState().deletedElementIds)
         );
         lastSavedSnapshot.current = snapshot;
         setVersion(updated.version);
@@ -232,24 +233,17 @@ export default function BoardPage({ params }: BoardPageProps) {
           try {
             const fresh = await getBoard(boardId);
             const currentLocal = latestElementsRef.current;
-            const remoteMap = new Map(fresh.elements.map((el) => [el.id, el]));
+            const { deletedElementIds } = useBoardStore.getState();
 
-            const deletedIds = useBoardStore.getState().deletedElementIds;
-            let lastSavedIds = new Set<string>();
-            try {
-              if (lastSavedSnapshot.current) {
-                const parsed = JSON.parse(lastSavedSnapshot.current);
-                if (Array.isArray(parsed)) {
-                  lastSavedIds = new Set(parsed.map((el: any) => el.id));
-                }
-              }
-            } catch {}
-
-            // Keep fresh remote elements (excluding any deleted locally), plus genuine new local elements
+            // Union merge: server state first (authoritative order), then every
+            // local element the server has not seen yet. The old version also
+            // filtered out anything that had ever been saved before, which
+            // permanently deleted your work whenever a peer's save won the race.
+            const mergedRemoteIds = new Set(fresh.elements.map((el) => el.id));
             const merged = [
-              ...fresh.elements.filter((el) => !deletedIds.has(el.id)),
+              ...fresh.elements.filter((el) => !deletedElementIds.has(el.id)),
               ...currentLocal.filter(
-                (el) => !remoteMap.has(el.id) && !lastSavedIds.has(el.id) && !deletedIds.has(el.id)
+                (el) => !mergedRemoteIds.has(el.id) && !deletedElementIds.has(el.id)
               )
             ];
 
@@ -259,7 +253,12 @@ export default function BoardPage({ params }: BoardPageProps) {
             setVersion(fresh.version);
 
             // Re-save merged state with fresh.version
-            const updated = await saveBoard(boardId, merged, fresh.version);
+            const updated = await saveBoard(
+              boardId,
+              merged,
+              fresh.version,
+              Array.from(deletedElementIds)
+            );
             setVersion(updated.version);
             setSaveStatus("saved");
             setSaveError(null);

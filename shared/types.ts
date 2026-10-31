@@ -73,6 +73,8 @@ export type BoardDocument = {
   ownerId?: string;
   shareToken?: string;
   backgroundColor?: string;
+  /** Ids of elements that were explicitly deleted (tombstones). */
+  deletedElementIds?: string[];
   elements: WhiteboardElement[];
   createdAt: string;
   updatedAt?: string;

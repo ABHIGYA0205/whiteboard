@@ -86,10 +86,15 @@ export async function getBoard(id: string): Promise<BoardDocument> {
   }
 }
 
-export function saveBoard(id: string, elements: WhiteboardElement[], version?: number) {
+export function saveBoard(
+  id: string,
+  elements: WhiteboardElement[],
+  version?: number,
+  deletedIds?: string[]
+) {
   return request<BoardDocument>(`/board/${id}`, {
     method: "PUT",
-    body: JSON.stringify({ elements, version })
+    body: JSON.stringify({ elements, version, deletedIds })
   });
 }
 
