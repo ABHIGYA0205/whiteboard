@@ -104,6 +104,19 @@ CLIENT_ORIGIN=http://localhost:3000,http://localhost:3001
 HF_TOKEN=your_token_optional
 ```
 
+#### S3-Compatible Object Storage (Optional)
+
+> **Note**: Leaving `S3_*` variables unset falls back to writing images to local disk in `uploads/` (these will be lost on deploy / ephemeral filesystems like Render).
+
+| Variable | Description |
+|---|---|
+| `S3_ENDPOINT` | S3-compatible service endpoint URL (optional; for R2, B2, MinIO) |
+| `S3_REGION` | S3 region (optional; defaults to `auto` or `us-east-1`) |
+| `S3_BUCKET` | S3 bucket name for persisting uploaded images |
+| `S3_ACCESS_KEY_ID` | S3 access key ID for authentication |
+| `S3_SECRET_ACCESS_KEY` | S3 secret access key for authentication |
+| `S3_PUBLIC_BASE_URL` | Public CDN or custom domain URL serving uploaded assets |
+
 Create `client/.env.local`:
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:4001

@@ -52,8 +52,8 @@ async function start() {
   });
 
   app.use(cors(corsOptions));
-  // Defensible payload limit allowing up to 8MB image data URLs
-  app.use(express.json({ limit: "10mb" }));
+  // Express body limit allowing a true 8 MB image (~10.7 MB as base64) to reach the handler
+  app.use(express.json({ limit: "12mb" }));
 
   // Static uploads directory for persisted images with open CORS for canvas rendering (A1.3)
   app.use(
@@ -93,6 +93,31 @@ async function start() {
     } catch (err: any) {
       response.status(503).json({ ready: false, mongo: err?.message || "ping failed" });
     }
+  });
+
+  // Global JSON error handler preventing express HTML error pages from leaking
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) {
+      return next(err);
+    }
+    if (err?.type === "entity.too.large" || err?.status === 413) {
+      res.status(413).json({
+        error: "Payload too large",
+        code: "PAYLOAD_TOO_LARGE"
+      });
+      return;
+    }
+    if (err?.status === 400 || err?.type === "entity.parse.failed") {
+      res.status(400).json({
+        error: err.message || "Invalid JSON payload",
+        code: "INVALID_REQUEST"
+      });
+      return;
+    }
+    res.status(err?.status || 500).json({
+      error: err?.message || "Internal server error",
+      code: err?.code || "INTERNAL_ERROR"
+    });
   });
 
   const server = http.createServer(app);

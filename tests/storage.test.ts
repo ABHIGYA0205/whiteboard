@@ -11,8 +11,11 @@ import {
   setS3ClientForTesting,
   getUploadsDir,
   isS3Configured,
-  MAX_IMAGE_SIZE_BYTES
+  MAX_IMAGE_SIZE_BYTES,
+  ImageSizeLimitError,
+  ImageValidationError
 } from "../server/src/utils/storage";
+import { uploadImageController } from "../server/src/controllers/board.controller";
 
 const SAMPLE_1PX_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -69,18 +72,36 @@ test("storage: extension and content-type derivation for allowed image types", (
   assert.throws(() => deriveImageMeta("text/plain"), /Unsupported image type/);
 });
 
-test("storage: guard rail rejects data URLs over 8 MB", async () => {
-  // Construct a payload that exceeds 8 MB
-  const oversizedDataUrl = `data:image/png;base64,${"A".repeat(MAX_IMAGE_SIZE_BYTES + 10)}`;
+test("storage: decoded buffer size is correctly measured; 8 MB allowed and > 8 MB rejected", async () => {
+  // 5 MB decoded buffer -> allowed
+  const buf5Mb = Buffer.alloc(5 * 1024 * 1024);
+  const dataUrl5Mb = `data:image/png;base64,${buf5Mb.toString("base64")}`;
+  const parsed5Mb = parseAndValidateDataUrl(dataUrl5Mb);
+  assert.equal(parsed5Mb.buffer.length, 5 * 1024 * 1024);
+
+  // Exactly 8 MB decoded buffer -> allowed
+  const buf8Mb = Buffer.alloc(MAX_IMAGE_SIZE_BYTES);
+  const dataUrl8Mb = `data:image/png;base64,${buf8Mb.toString("base64")}`;
+  const parsed8Mb = parseAndValidateDataUrl(dataUrl8Mb);
+  assert.equal(parsed8Mb.buffer.length, MAX_IMAGE_SIZE_BYTES);
+
+  // 8.5 MB decoded buffer -> rejected based on decoded size
+  const buf8_5Mb = Buffer.alloc(8.5 * 1024 * 1024);
+  const dataUrl8_5Mb = `data:image/png;base64,${buf8_5Mb.toString("base64")}`;
 
   assert.throws(
-    () => parseAndValidateDataUrl(oversizedDataUrl),
-    /exceeds maximum allowed size of 8 MB/
+    () => parseAndValidateDataUrl(dataUrl8_5Mb),
+    (err: any) => {
+      assert.ok(err instanceof ImageSizeLimitError);
+      assert.equal(err.statusCode, 413);
+      assert.match(err.message, /exceeds maximum allowed size of 8 MB \(received 8\.50 MB\)/);
+      return true;
+    }
   );
 
   await assert.rejects(
-    () => saveBase64Image(oversizedDataUrl),
-    /exceeds maximum allowed size of 8 MB/
+    () => saveBase64Image(dataUrl8_5Mb),
+    /exceeds maximum allowed size of 8 MB \(received 8\.50 MB\)/
   );
 });
 
@@ -116,6 +137,36 @@ test("storage: fallback to local disk when S3 is not configured", async () => {
 
   // Clean up test file
   await fs.promises.unlink(fullPath);
+});
+
+test("storage: S3 PutObject failure falls back to local disk and preserves image", async () => {
+  // S3 is configured, but PutObject throws
+  setS3ConfigForTesting({
+    bucket: "whiteboard-assets",
+    region: "us-east-1",
+    publicBaseUrl: "https://cdn.canvasflow.dev"
+  });
+
+  const mockFailingS3Client = {
+    send: async () => {
+      throw new Error("Network connection reset: S3 unreachable");
+    }
+  };
+  setS3ClientForTesting(mockFailingS3Client);
+  assert.equal(isS3Configured(), true);
+
+  // Must fall back to local disk and return /uploads/ URL instead of throwing
+  const fallbackUrl = await saveBase64Image(SAMPLE_1PX_PNG);
+  assert.match(fallbackUrl, /^\/uploads\/[0-9a-f-]+\.png$/);
+
+  const localFilename = path.basename(fallbackUrl);
+  const fullPath = path.join(getUploadsDir(), localFilename);
+  assert.ok(fs.existsSync(fullPath), "Fallen-back image must exist on local disk");
+
+  // Clean up
+  await fs.promises.unlink(fullPath);
+  setS3ConfigForTesting(null);
+  setS3ClientForTesting(null);
 });
 
 test("storage: S3-configured upload constructs public URL and sets S3 metadata", async () => {
@@ -177,4 +228,73 @@ test("storage: S3 publicBaseUrl trailing slash is normalized", async () => {
   // Reset
   setS3ConfigForTesting(null);
   setS3ClientForTesting(null);
+});
+
+test("uploadImageController: maps validation, size, and storage errors to correct HTTP status codes", async () => {
+  const createMockRes = () => {
+    let statusCode = 200;
+    let jsonBody: any = null;
+    const res: any = {
+      status(code: number) {
+        statusCode = code;
+        return res;
+      },
+      json(body: any) {
+        jsonBody = body;
+        return res;
+      },
+      get statusCode() {
+        return statusCode;
+      },
+      get body() {
+        return jsonBody;
+      }
+    };
+    return res;
+  };
+
+  // 1. Missing imageBase64 -> 400
+  {
+    const req: any = { body: {} };
+    const res = createMockRes();
+    await uploadImageController(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, "INVALID_REQUEST");
+  }
+
+  // 2. Unsupported image type (text/plain) -> 400
+  {
+    const req: any = {
+      body: { imageBase64: "data:text/plain;base64,SGVsbG8gd29ybGQ=" }
+    };
+    const res = createMockRes();
+    await uploadImageController(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, "UNSUPPORTED_IMAGE_TYPE");
+    assert.match(res.body.error, /Unsupported image type/);
+  }
+
+  // 3. Oversized image (> 8 MB decoded) -> 413
+  {
+    const buf9Mb = Buffer.alloc(9 * 1024 * 1024);
+    const req: any = {
+      body: { imageBase64: `data:image/png;base64,${buf9Mb.toString("base64")}` }
+    };
+    const res = createMockRes();
+    await uploadImageController(req, res);
+    assert.equal(res.statusCode, 413);
+    assert.equal(res.body.code, "PAYLOAD_TOO_LARGE");
+    assert.match(res.body.error, /exceeds maximum allowed size of 8 MB/);
+  }
+
+  // 4. Valid image (1px PNG) -> 200
+  {
+    const req: any = { body: { imageBase64: SAMPLE_1PX_PNG } };
+    const res = createMockRes();
+    await uploadImageController(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.match(res.body.url, /^\/uploads\/[0-9a-f-]+\.png$/);
+    const filename = path.basename(res.body.url);
+    await fs.promises.unlink(path.join(getUploadsDir(), filename));
+  }
 });

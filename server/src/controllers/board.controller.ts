@@ -8,7 +8,12 @@ import {
   applyBoardOps,
   VersionConflictError
 } from "../services/board.service";
-import { saveBase64Image } from "../utils/storage";
+import {
+  saveBase64Image,
+  ImageValidationError,
+  ImageSizeLimitError,
+  StorageBackendError
+} from "../utils/storage";
 
 function getParamId(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -134,15 +139,58 @@ export async function uploadImageController(request: Request, response: Response
   try {
     const { imageBase64 } = request.body;
     if (!imageBase64 || typeof imageBase64 !== "string") {
-      response.status(400).json({ error: "imageBase64 is required." });
+      response.status(400).json({ error: "imageBase64 is required.", code: "INVALID_REQUEST" });
       return;
     }
 
     const url = await saveBase64Image(imageBase64);
     response.json({ url });
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error instanceof ImageSizeLimitError ||
+      error?.statusCode === 413 ||
+      error?.code === "PAYLOAD_TOO_LARGE" ||
+      error?.type === "entity.too.large" ||
+      /exceeds maximum allowed size|payload too large|too large/i.test(error?.message || "")
+    ) {
+      response.status(413).json({
+        error: error.message || "Image exceeds maximum allowed size of 8 MB",
+        code: error.code || "PAYLOAD_TOO_LARGE"
+      });
+      return;
+    }
+
+    if (
+      error instanceof ImageValidationError ||
+      error?.statusCode === 400 ||
+      error?.code === "INVALID_IMAGE" ||
+      error?.code === "UNSUPPORTED_IMAGE_TYPE" ||
+      error?.code === "EMPTY_IMAGE" ||
+      /unsupported image type|invalid image|invalid data url/i.test(error?.message || "")
+    ) {
+      response.status(400).json({
+        error: error.message || "Invalid image",
+        code: error.code || "INVALID_IMAGE"
+      });
+      return;
+    }
+
+    if (
+      error instanceof StorageBackendError ||
+      error?.statusCode === 503 ||
+      error?.code === "STORAGE_ERROR" ||
+      /storage|s3|disk|unavailable/i.test(error?.message || "")
+    ) {
+      response.status(503).json({
+        error: error.message || "Storage service unavailable",
+        code: error.code || "STORAGE_ERROR"
+      });
+      return;
+    }
+
     response.status(500).json({
-      error: error instanceof Error ? error.message : "Failed to upload image."
+      error: error instanceof Error ? error.message : "Failed to upload image.",
+      code: "INTERNAL_ERROR"
     });
   }
 }

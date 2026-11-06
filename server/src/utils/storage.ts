@@ -5,7 +5,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { env, type S3Config } from "./env";
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
-export const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
+export const MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB decoded image bytes
 
 // Ensure uploads directory exists synchronously on module load
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -14,6 +14,37 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 
 export function getUploadsDir(): string {
   return UPLOADS_DIR;
+}
+
+export class ImageValidationError extends Error {
+  code: string;
+  statusCode: number;
+
+  constructor(message: string, code = "INVALID_IMAGE", statusCode = 400) {
+    super(message);
+    this.name = "ImageValidationError";
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+export class ImageSizeLimitError extends ImageValidationError {
+  constructor(message: string) {
+    super(message, "PAYLOAD_TOO_LARGE", 413);
+    this.name = "ImageSizeLimitError";
+  }
+}
+
+export class StorageBackendError extends Error {
+  code: string;
+  statusCode: number;
+
+  constructor(message: string, code = "STORAGE_ERROR") {
+    super(message);
+    this.name = "StorageBackendError";
+    this.code = code;
+    this.statusCode = 503;
+  }
 }
 
 export interface ImageMeta {
@@ -43,8 +74,10 @@ export function deriveImageMeta(rawType: string): ImageMeta {
   ) {
     return { contentType: "image/svg+xml", extension: "svg" };
   }
-  throw new Error(
-    `Unsupported image type "${rawType}". Allowed types: image/png, image/jpeg, image/webp, image/gif, image/svg+xml.`
+  throw new ImageValidationError(
+    `Unsupported image type "${rawType}". Allowed types: image/png, image/jpeg, image/webp, image/gif, image/svg+xml.`,
+    "UNSUPPORTED_IMAGE_TYPE",
+    400
   );
 }
 
@@ -68,21 +101,24 @@ export interface ParsedImage {
 
 /**
  * Parses and validates an image data URL against size and format guard rails.
- * Rejects data URLs over 8 MB and disallows non-image or unsupported formats.
+ * Rejects based on decoded buffer length (8 MB limit).
+ * Keeps a cheap sanity pre-check on data URL length, but bases error messages
+ * on the decoded size.
  */
 export function parseAndValidateDataUrl(dataUrl: string): ParsedImage {
-  if (Buffer.byteLength(dataUrl) > MAX_IMAGE_SIZE_BYTES) {
-    throw new Error(
-      `Image data URL exceeds maximum allowed size of 8 MB (received ${(
-        Buffer.byteLength(dataUrl) /
-        (1024 * 1024)
-      ).toFixed(2)} MB)`
+  // Cheap sanity pre-check before regex/decoding.
+  // 8 MB of binary translates to ~10.7 MB in base64. Reject obviously oversized payloads (> 16 MB).
+  const rawBytes = Buffer.byteLength(dataUrl);
+  if (rawBytes > 16 * 1024 * 1024) {
+    const estimatedMb = ((rawBytes * 0.75) / (1024 * 1024)).toFixed(2);
+    throw new ImageSizeLimitError(
+      `Image exceeds maximum allowed size of 8 MB (received ~${estimatedMb} MB)`
     );
   }
 
   const match = dataUrl.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
   if (!match) {
-    throw new Error("Invalid image data URL format");
+    throw new ImageValidationError("Invalid image data URL format", "INVALID_IMAGE", 400);
   }
 
   const mimeType = match[1].toLowerCase().trim();
@@ -92,8 +128,8 @@ export function parseAndValidateDataUrl(dataUrl: string): ParsedImage {
   const buffer = Buffer.from(base64Data.replace(/\s+/g, ""), "base64");
 
   if (buffer.length > MAX_IMAGE_SIZE_BYTES) {
-    throw new Error(
-      `Decoded image exceeds maximum allowed size of 8 MB (received ${(
+    throw new ImageSizeLimitError(
+      `Image exceeds maximum allowed size of 8 MB (received ${(
         buffer.length /
         (1024 * 1024)
       ).toFixed(2)} MB)`
@@ -101,7 +137,7 @@ export function parseAndValidateDataUrl(dataUrl: string): ParsedImage {
   }
 
   if (buffer.length === 0) {
-    throw new Error("Decoded image buffer is empty");
+    throw new ImageValidationError("Decoded image buffer is empty", "EMPTY_IMAGE", 400);
   }
 
   return { contentType, extension, buffer };
@@ -164,10 +200,19 @@ export function warnIfLocalStorage(): void {
 /**
  * Persists a base64 image data URL to S3-compatible object storage (if configured)
  * or falls back to local disk in uploads/ and returns the public URL.
+ * If S3 PutObject fails, logs a loud warning and falls back to writing to local disk
+ * so user images are never lost.
  */
 export async function saveBase64Image(dataUrl: string): Promise<string> {
   if (!dataUrl.startsWith("data:")) {
-    return dataUrl;
+    if (dataUrl.startsWith("http://") || dataUrl.startsWith("https://") || dataUrl.startsWith("/uploads/")) {
+      return dataUrl;
+    }
+    throw new ImageValidationError(
+      "Invalid image: expected data URL (data:image/...) or existing image URL",
+      "INVALID_IMAGE",
+      400
+    );
   }
 
   let parsed: ParsedImage;
@@ -208,19 +253,24 @@ export async function saveBase64Image(dataUrl: string): Promise<string> {
         return `${config.endpoint.replace(/\/+$/, "")}/${config.bucket}/${key}`;
       }
       return `https://${config.bucket}.s3.${config.region || "us-east-1"}.amazonaws.com/${key}`;
-    } catch (error) {
-      console.error(
-        `Failed to upload image to S3 (${stripBase64Payload(dataUrl)}): ${
-          error instanceof Error ? error.message : error
-        }`
+    } catch (s3Error: any) {
+      const errMsg = s3Error instanceof Error ? s3Error.message : String(s3Error);
+      console.warn(
+        `⚠️ S3 upload failed (${errMsg}). Falling back to local disk storage; images may be lost on deploy.`
       );
-      throw error;
+      // Fall through to local disk fallback so image is preserved
     }
   }
 
   // Fallback to local disk storage
   warnIfLocalStorage();
-  const filePath = path.join(UPLOADS_DIR, filename);
-  await fs.promises.writeFile(filePath, buffer);
-  return `/uploads/${filename}`;
+  try {
+    const filePath = path.join(UPLOADS_DIR, filename);
+    await fs.promises.writeFile(filePath, buffer);
+    return `/uploads/${filename}`;
+  } catch (diskError) {
+    const errMsg = diskError instanceof Error ? diskError.message : String(diskError);
+    console.error(`Failed to write image to disk: ${errMsg}`);
+    throw new StorageBackendError(`Failed to persist image: ${errMsg}`);
+  }
 }
