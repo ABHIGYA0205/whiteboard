@@ -5,7 +5,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { PropertiesPanel } from "@/components/PropertiesPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard } from "@/lib/api";
+import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard, saveBoardDelta } from "@/lib/api";
 import { useSocket } from "@/hooks/useSocket";
 import { useBoardStore } from "@/store/boardStore";
 import { useEffect, useRef, useState } from "react";
@@ -154,6 +154,7 @@ export default function BoardPage({ params }: BoardPageProps) {
   }, [isViewer, saveStatus]);
 
   const lastSavedSnapshot = useRef("");
+  const savedElementsRef = useRef<Map<string, WhiteboardElement>>(new Map());
   const latestElementsRef = useRef(elements);
   const latestVersionRef = useRef(version);
 
@@ -176,6 +177,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         if (!cancelled) {
           loadBoard(board.elements, board.version || 0);
           lastSavedSnapshot.current = JSON.stringify(board.elements);
+          savedElementsRef.current = new Map(board.elements.map((element) => [element.id, element]));
           const savedTitle =
             board.title ||
             (typeof window !== "undefined" ? localStorage.getItem(`whiteboard_title_${boardId}`) : "") ||
@@ -216,20 +218,49 @@ export default function BoardPage({ params }: BoardPageProps) {
 
       try {
         setSaveStatus("saving");
-        const updated = await saveBoard(
+        const localElements = latestElementsRef.current;
+
+        // Upload only what changed (usually one in-progress stroke) instead of
+        // the whole board on every tick.
+        const delta = await saveBoardDelta(
           boardId,
-          latestElementsRef.current,
-          latestVersionRef.current,
-          Array.from(useBoardStore.getState().deletedElementIds)
+          localElements,
+          savedElementsRef.current,
+          Array.from(useBoardStore.getState().deletedElementIds),
+          latestVersionRef.current
         );
+
+        savedElementsRef.current = new Map(localElements.map((element) => [element.id, element]));
         lastSavedSnapshot.current = snapshot;
-        setVersion(updated.version);
+        setVersion(delta.board.version);
         setSaveStatus("saved");
         setSaveError(null);
       } catch (error: any) {
         if (error?.status === 409) {
-          // Version conflict: smart union merge so newly drawn lines and text are NEVER wiped out
+          // The board version drifts as peers edit (and as our own socket events
+          // are persisted), so a stale version is normal, not a real conflict.
+          // Retry the delta once with the fresh version before doing anything
+          // expensive — a full-board upload here would undo the payload win.
           setSaveStatus("conflict");
+          try {
+            const freshVersion = (await getBoard(boardId)).version;
+            const retried = await saveBoardDelta(
+              boardId,
+              latestElementsRef.current,
+              savedElementsRef.current,
+              Array.from(useBoardStore.getState().deletedElementIds),
+              freshVersion
+            );
+            const localElements = latestElementsRef.current;
+            savedElementsRef.current = new Map(localElements.map((element) => [element.id, element]));
+            lastSavedSnapshot.current = JSON.stringify(localElements);
+            setVersion(retried.board.version);
+            setSaveStatus("saved");
+            setSaveError(null);
+            return;
+          } catch {
+            // fall through to the full union-merge rescue below
+          }
           try {
             const fresh = await getBoard(boardId);
             const currentLocal = latestElementsRef.current;
@@ -259,6 +290,7 @@ export default function BoardPage({ params }: BoardPageProps) {
               fresh.version,
               Array.from(deletedElementIds)
             );
+            savedElementsRef.current = new Map(merged.map((element) => [element.id, element]));
             setVersion(updated.version);
             setSaveStatus("saved");
             setSaveError(null);

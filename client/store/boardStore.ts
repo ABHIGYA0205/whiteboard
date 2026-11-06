@@ -101,6 +101,12 @@ type BoardState = {
   resetViewport: () => void;
   setZoom: (zoom: number) => void;
   upsertRemoteElement: (element: WhiteboardElement) => void;
+  /** Appends streamed stroke points from a peer (incremental draw updates). */
+  appendRemotePoints: (
+    elementId: string,
+    points: Point[],
+    bounds: { x: number; y: number; width: number; height: number }
+  ) => void;
   upsertRemoteCursor: (cursor: CursorPosition) => void;
   removeRemoteCursor: (userId: string) => void;
   cleanStaleCursors: () => void;
@@ -345,6 +351,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         selectedElementId: retainedSelectedId,
         selectedElementIds: retainedSelectedIds
       };
+    }),
+  appendRemotePoints: (elementId, points, bounds) =>
+    set((state) => {
+      if (points.length === 0) return state;
+      if (state.deletedElementIds.has(elementId)) return state;
+      // Never touch the element the local user is drawing/editing right now.
+      if (state.editingElementId === elementId) return state;
+      if (state.activeElementIds.has(elementId)) return state;
+
+      const index = state.elements.findIndex((element) => element.id === elementId);
+      if (index === -1) return state;
+
+      const next = [...state.elements];
+      const target = next[index];
+      next[index] = {
+        ...target,
+        points: [...(target.points ?? []), ...points],
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height
+      };
+      return { elements: next };
     }),
   setActiveElementIds: (ids) =>
     set((state) => {

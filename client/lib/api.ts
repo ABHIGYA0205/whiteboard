@@ -1,4 +1,5 @@
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
+import { sameElement } from "@shared/collab";
 
 export const getApiUrl = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -103,6 +104,48 @@ export function saveBoardOps(id: string, ops: BoardOp[], version?: number) {
     method: "POST",
     body: JSON.stringify({ ops, version })
   });
+}
+
+/**
+ * Autosave that uploads only what changed since the last successful save.
+ * The full-board PUT re-uploaded every element every 4 s (tens of KB on a busy
+ * board), which is what pushed small hosted instances into stalls.
+ */
+export async function saveBoardDelta(
+  id: string,
+  elements: WhiteboardElement[],
+  previouslySaved: Map<string, WhiteboardElement>,
+  deletedIds: string[],
+  version?: number
+): Promise<{ board: BoardDocument; sentIds: string[]; removedIds: string[] }> {
+  const currentIds = new Set(elements.map((element) => element.id));
+  const ops: BoardOp[] = [];
+  const sentIds: string[] = [];
+
+  for (const element of elements) {
+    const previous = previouslySaved.get(element.id);
+    if (!previous || !sameElement(previous, element)) {
+      ops.push({ op: previous ? "update" : "add", element });
+      sentIds.push(element.id);
+    }
+  }
+
+  const removedIds = [
+    ...Array.from(previouslySaved.keys()).filter((elementId) => !currentIds.has(elementId)),
+    ...deletedIds.filter((elementId) => !currentIds.has(elementId))
+  ].filter((elementId, index, all) => all.indexOf(elementId) === index);
+
+  for (const elementId of removedIds) {
+    // The delete op only needs an id; a minimal stub satisfies the type.
+    ops.push({ op: "delete", element: { id: elementId } as WhiteboardElement });
+  }
+
+  if (ops.length === 0) {
+    return { board: { id, version: version ?? 0, elements } as BoardDocument, sentIds, removedIds };
+  }
+
+  const board = await saveBoardOps(id, ops, version);
+  return { board, sentIds, removedIds };
 }
 
 export function clearBoardRemote(id: string) {

@@ -32,6 +32,14 @@ import {
 
 type CollaborationApi = {
   emitDraw: (element: WhiteboardElement) => void;
+  emitDrawProgress?: (progress: {
+    elementId: string;
+    points: { x: number; y: number }[];
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => void;
   emitElementUpdate: (element: WhiteboardElement) => void;
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
@@ -619,6 +627,9 @@ export function useCanvas({
     }
 
     if (interaction.mode === "drawing") {
+      const before = currentElements.find(
+        (element) => element.id === interaction.elementId
+      );
       const nextElements = currentElements.map((element) =>
         element.id === interaction.elementId
           ? updateElementDraft(element, point)
@@ -629,7 +640,27 @@ export function useCanvas({
         (candidate) => candidate.id === interaction.elementId
       );
       if (element) {
-        collaboration.emitDraw(element);
+        const previousPoints = before?.points ?? [];
+        const currentPoints = element.points ?? [];
+        const grewBy = currentPoints.length - previousPoints.length;
+        // Pencil/multi-point strokes stream only the new points; re-sending the
+        // whole element each move is quadratic and floods small instances.
+        if (
+          grewBy > 0 &&
+          collaboration.emitDrawProgress &&
+          element.type === "pencil"
+        ) {
+          collaboration.emitDrawProgress({
+            elementId: element.id,
+            points: currentPoints.slice(previousPoints.length),
+            x: element.x,
+            y: element.y,
+            width: element.width,
+            height: element.height
+          });
+        } else {
+          collaboration.emitDraw(element);
+        }
       }
       return;
     }

@@ -22,7 +22,7 @@ import type { WhiteboardElement } from "./types";
  * count + endpoints, which is enough because a partial stroke is always re-sent
  * with more points on the next event.
  */
-function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean {
+export function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean {
   if (a === b) return true;
   if (
     a.type !== b.type ||

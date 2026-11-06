@@ -261,6 +261,46 @@ export function registerBoardSocket(io: Server, socket: Socket) {
     socket.to(boardId).emit("draw", { boardId, element });
   });
 
+  socket.on(
+    "draw-progress",
+    ({
+      boardId,
+      elementId,
+      points,
+      x,
+      y,
+      width,
+      height
+    }: {
+      boardId: string;
+      elementId: string;
+      points?: { x: number; y: number }[];
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    }) => {
+      if (socket.data.isViewer) return;
+      if (!boardId || !elementId || !Array.isArray(points) || points.length === 0) return;
+
+      // Keep the in-memory board current so a reconnecting client sees the
+      // stroke in progress, then relay only what was added.
+      const mirrored = liveBoard(boardId).get(elementId);
+      if (mirrored) {
+        liveBoard(boardId).set(elementId, {
+          ...mirrored,
+          points: [...(mirrored.points ?? []), ...points],
+          x: typeof x === "number" ? x : mirrored.x,
+          y: typeof y === "number" ? y : mirrored.y,
+          width: typeof width === "number" ? width : mirrored.width,
+          height: typeof height === "number" ? height : mirrored.height
+        });
+      }
+
+      socket.to(boardId).emit("draw-progress", { boardId, elementId, points, x, y, width, height });
+    }
+  );
+
   socket.on("update-element", ({ boardId, element }) => {
     if (socket.data.isViewer) return;
     if (!boardId || !element) return;

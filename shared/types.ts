@@ -90,6 +90,23 @@ export type DrawEventPayload = {
   element: WhiteboardElement;
 };
 
+/**
+ * Incremental stroke update. Sending the whole element on every pointermove is
+ * O(points^2) per stroke — a 500-point pencil line pushed ~2 MB through the
+ * server — which saturates small instances and makes live sync lag. Only the
+ * points added since the last event are sent instead.
+ */
+export type DrawProgressPayload = {
+  boardId: string;
+  elementId: string;
+  /** Points appended since the previous event for this element. */
+  points: Point[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type CursorEventPayload = {
   boardId: string;
   cursor: CursorPosition;

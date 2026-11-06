@@ -4,6 +4,7 @@ import { useBoardStore } from "@/store/boardStore";
 import type {
   CursorPosition,
   DrawEventPayload,
+  DrawProgressPayload,
   PresenceUser,
   UpdateElementPayload,
   WhiteboardElement
@@ -123,6 +124,18 @@ export function useSocket(boardId: string) {
         upsertRemoteElement(element);
       };
 
+      const handleDrawProgress = ({
+        elementId,
+        points,
+        x,
+        y,
+        width,
+        height
+      }: Omit<DrawProgressPayload, "boardId">) => {
+        if (!elementId || !Array.isArray(points)) return;
+        useBoardStore.getState().appendRemotePoints(elementId, points, { x, y, width, height });
+      };
+
       const handleUpdateElement = ({ element }: UpdateElementPayload) => {
         upsertRemoteElement(element);
       };
@@ -192,6 +205,7 @@ export function useSocket(boardId: string) {
       activeSocket.on("identity", handleIdentity);
       activeSocket.on("board:state", handleBoardState);
       activeSocket.on("draw", handleDraw);
+      activeSocket.on("draw-progress", handleDrawProgress);
       activeSocket.on("update-element", handleUpdateElement);
       activeSocket.on("cursor-position", handleCursor);
       activeSocket.on("cursor-leave", handleCursorLeave);
@@ -225,6 +239,7 @@ export function useSocket(boardId: string) {
         activeSocket?.off("connect", join);
         activeSocket?.off("board:state", handleBoardState);
         activeSocket?.off("draw", handleDraw);
+      activeSocket?.off("draw-progress", handleDrawProgress);
         activeSocket?.off("update-element", handleUpdateElement);
         activeSocket?.off("cursor-position", handleCursor);
         activeSocket?.off("cursor-leave", handleCursorLeave);
@@ -301,6 +316,10 @@ export function useSocket(boardId: string) {
     () => ({
       emitDraw(element: WhiteboardElement) {
         socketRef.current?.emit("draw", { boardId, element });
+      },
+      emitDrawProgress(progress: Omit<DrawProgressPayload, "boardId">) {
+        if (!progress.points.length) return;
+        socketRef.current?.emit("draw-progress", { boardId, ...progress });
       },
       emitElementUpdate(element: WhiteboardElement) {
         socketRef.current?.emit("update-element", { boardId, element });
