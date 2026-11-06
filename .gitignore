@@ -47,3 +47,6 @@ next-env.d.ts
 server/uploads/*
 !server/uploads/.gitkeep
 collab-sync-fix.patch
+
+*.patch
+*.zip
