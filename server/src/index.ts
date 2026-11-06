@@ -7,7 +7,7 @@ import { boardRouter } from "./routes/board";
 import { aiRouter } from "./routes/ai";
 import { registerBoardSocket } from "./sockets/board.socket";
 import { env } from "./utils/env";
-import { getUploadsDir } from "./utils/storage";
+import { getUploadsDir, isS3Configured, warnIfLocalStorage } from "./utils/storage";
 
 async function start() {
   // Connect to MongoDB asynchronously with auto-retry (keeps server alive if offline/network issue)
@@ -52,8 +52,8 @@ async function start() {
   });
 
   app.use(cors(corsOptions));
-  // Defensible 5mb payload limit instead of 100mb now that base64 images are persisted (A1.5)
-  app.use(express.json({ limit: "5mb" }));
+  // Defensible payload limit allowing up to 8MB image data URLs
+  app.use(express.json({ limit: "10mb" }));
 
   // Static uploads directory for persisted images with open CORS for canvas rendering (A1.3)
   app.use(
@@ -72,7 +72,10 @@ async function start() {
 
   // Liveness check
   app.get("/health", (_request, response) => {
-    response.json({ ok: true });
+    response.json({
+      ok: true,
+      storage: isS3Configured() ? "s3" : "local"
+    });
   });
 
   // Readiness check that verifies MongoDB connection (A8.5)
@@ -122,6 +125,12 @@ async function start() {
   server.listen(env.port, () => {
     console.log(`Server listening on http://localhost:${env.port}`);
     console.log(`Allowed client origins: ${env.clientOrigins.join(", ")}`);
+    warnIfLocalStorage();
+    if (isS3Configured()) {
+      console.log(`Storage backend: s3 (bucket: ${env.s3.bucket})`);
+    } else {
+      console.log("Storage backend: local");
+    }
   });
 }
 

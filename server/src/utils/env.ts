@@ -7,6 +7,15 @@ const defaultOrigins = [
   "http://localhost:3001"
 ];
 
+export interface S3Config {
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  publicBaseUrl?: string;
+}
+
 function validateEnv() {
   const errors: string[] = [];
 
@@ -36,7 +45,23 @@ function validateEnv() {
     port,
     mongoUri,
     hfToken: process.env.HF_TOKEN ?? "",
-    clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins
+    clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins,
+    get s3(): S3Config {
+      return {
+        endpoint: process.env.S3_ENDPOINT?.trim() || undefined,
+        region: process.env.S3_REGION?.trim() || undefined,
+        bucket: process.env.S3_BUCKET?.trim() || undefined,
+        accessKeyId: process.env.S3_ACCESS_KEY_ID?.trim() || undefined,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY?.trim() || undefined,
+        publicBaseUrl: process.env.S3_PUBLIC_BASE_URL?.trim() || undefined
+      };
+    },
+    get s3Endpoint() { return process.env.S3_ENDPOINT?.trim(); },
+    get s3Region() { return process.env.S3_REGION?.trim(); },
+    get s3Bucket() { return process.env.S3_BUCKET?.trim(); },
+    get s3AccessKeyId() { return process.env.S3_ACCESS_KEY_ID?.trim(); },
+    get s3SecretAccessKey() { return process.env.S3_SECRET_ACCESS_KEY?.trim(); },
+    get s3PublicBaseUrl() { return process.env.S3_PUBLIC_BASE_URL?.trim(); }
   };
 }
 
