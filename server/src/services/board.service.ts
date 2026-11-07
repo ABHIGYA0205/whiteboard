@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import mongoose from "mongoose";
 import { BoardModel } from "../models/Board";
 import { saveBase64Image } from "../utils/storage";
+import { signBoardToken, hashToken } from "../utils/token";
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
 
 export class VersionConflictError extends Error {
@@ -19,11 +20,13 @@ function isMongoConnected(): boolean {
 }
 
 function toBoardDocument(doc: any): BoardDocument {
+  const hasOwner = Boolean(doc.ownerId && typeof doc.ownerId === "string" && doc.ownerId.trim());
   return {
     id: doc.id,
     version: typeof doc.version === "number" ? doc.version : 0,
     title: doc.title || "Untitled Board",
-    ownerId: doc.ownerId,
+    ownerId: hasOwner ? doc.ownerId : undefined,
+    claimable: !hasOwner,
     shareToken: doc.shareToken,
     backgroundColor: doc.backgroundColor || "",
     deletedElementIds: doc.deletedElementIds || [],
@@ -58,27 +61,34 @@ function toBoardDocument(doc: any): BoardDocument {
 export async function createBoard(
   id: string = randomUUID(),
   ownerId?: string
-): Promise<BoardDocument> {
+): Promise<BoardDocument & { ownerToken?: string }> {
+  let ownerToken: string | undefined;
+  let effectiveOwnerId = ownerId;
+  if (effectiveOwnerId === undefined) {
+    ownerToken = signBoardToken(id, "owner", 365 * 24);
+    effectiveOwnerId = hashToken(ownerToken);
+  }
+
   if (isMongoConnected()) {
     try {
       const existing = await BoardModel.findOne({ id }).lean();
       if (existing) {
         const doc = toBoardDocument(existing);
         inMemoryBoards.set(id, doc);
-        return doc;
+        return { ...doc, ownerToken };
       }
 
       const board = await BoardModel.create({
         id,
         version: 0,
-        ownerId: ownerId || randomUUID(),
+        ownerId: effectiveOwnerId,
         shareToken: randomUUID(),
         elements: []
       });
 
       const doc = toBoardDocument(board.toObject());
       inMemoryBoards.set(id, doc);
-      return doc;
+      return { ...doc, ownerToken };
     } catch {
       // Fallback to in-memory below if Mongo throws
     }
@@ -86,20 +96,63 @@ export async function createBoard(
 
   // In-memory fallback
   if (inMemoryBoards.has(id)) {
-    return inMemoryBoards.get(id)!;
+    return { ...inMemoryBoards.get(id)!, ownerToken };
   }
 
+  const hasOwner = Boolean(effectiveOwnerId && effectiveOwnerId.trim());
   const memoryDoc: BoardDocument = {
     id,
     version: 0,
-    ownerId: ownerId || randomUUID(),
+    ownerId: hasOwner ? effectiveOwnerId : undefined,
+    claimable: !hasOwner,
     shareToken: randomUUID(),
     elements: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
   inMemoryBoards.set(id, memoryDoc);
-  return memoryDoc;
+  return { ...memoryDoc, ownerToken };
+}
+
+export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument } | null> {
+  const ownerToken = signBoardToken(id, "owner", 365 * 24);
+  const ownerId = hashToken(ownerToken);
+
+  if (isMongoConnected()) {
+    try {
+      const existing = await BoardModel.findOne({ id });
+      if (existing) {
+        if (existing.ownerId && typeof existing.ownerId === "string" && existing.ownerId.trim()) {
+          throw new Error("ALREADY_CLAIMED");
+        }
+        existing.ownerId = ownerId;
+        await existing.save();
+        const doc = toBoardDocument(existing.toObject());
+        inMemoryBoards.set(id, doc);
+        return { ownerToken, board: doc };
+      }
+    } catch (err: any) {
+      if (err.message === "ALREADY_CLAIMED") throw err;
+      // Fall through to in-memory check
+    }
+  }
+
+  const memoryDoc = inMemoryBoards.get(id);
+  if (!memoryDoc) {
+    return null;
+  }
+  if (memoryDoc.ownerId && memoryDoc.ownerId.trim()) {
+    throw new Error("ALREADY_CLAIMED");
+  }
+
+  const updatedDoc: BoardDocument = {
+    ...memoryDoc,
+    ownerId,
+    claimable: false,
+    updatedAt: new Date().toISOString()
+  };
+  inMemoryBoards.set(id, updatedDoc);
+  return { ownerToken, board: updatedDoc };
 }
 
 export async function getBoard(id: string): Promise<BoardDocument | null> {

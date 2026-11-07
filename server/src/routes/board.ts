@@ -6,7 +6,9 @@ import {
   updateBoardController,
   deleteBoardController,
   applyBoardOpsController,
-  uploadImageController
+  uploadImageController,
+  claimBoardController,
+  shareBoardController
 } from "../controllers/board.controller";
 import { rateLimiter } from "../middlewares/rateLimiter";
 
@@ -20,6 +22,8 @@ boardRouter.use(generalLimiter);
 boardRouter.post("/", createLimiter, createBoardController);
 boardRouter.post("/clean", cleanBoardController);
 boardRouter.post("/upload", uploadImageController);
+boardRouter.post("/:id/claim", claimBoardController);
+boardRouter.post("/:id/share", shareBoardController);
 boardRouter.get("/:id", getBoardController);
 boardRouter.put("/:id", updateBoardController);
 boardRouter.delete("/:id", deleteBoardController);

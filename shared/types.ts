@@ -71,6 +71,8 @@ export type BoardDocument = {
   version: number;
   title?: string;
   ownerId?: string;
+  ownerToken?: string;
+  claimable?: boolean;
   shareToken?: string;
   backgroundColor?: string;
   /** Ids of elements that were explicitly deleted (tombstones). */

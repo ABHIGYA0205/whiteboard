@@ -5,7 +5,8 @@ import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { PropertiesPanel } from "@/components/PropertiesPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard, saveBoardDelta } from "@/lib/api";
+import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard, saveBoardDelta, claimBoard } from "@/lib/api";
+import { getToken, setToken, decodeRole } from "@/lib/boardAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useBoardStore } from "@/store/boardStore";
 import { useEffect, useRef, useState } from "react";
@@ -59,6 +60,8 @@ export default function BoardPage({ params }: BoardPageProps) {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isViewer, setIsViewer] = useState(false);
+  const [isUnauthenticated, setIsUnauthenticated] = useState(false);
+  const [pastedLinkInput, setPastedLinkInput] = useState("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "conflict" | "error">("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [clearedElementsBackup, setClearedElementsBackup] = useState<WhiteboardElement[] | null>(null);
@@ -113,15 +116,25 @@ export default function BoardPage({ params }: BoardPageProps) {
       setCurrentUserName(stored);
     }
 
-    // P1-1: Check if link is view-only (?role=viewer)
+    // Check if URL has ?share=<token> and save it, stripping from address bar
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("role") === "viewer") {
+      const shareToken = params.get("share");
+      if (shareToken) {
+        setToken(boardId, shareToken);
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("share");
+        window.history.replaceState({}, "", cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ""));
+      }
+
+      const activeToken = getToken(boardId);
+      const activeRole = decodeRole(activeToken);
+      if (activeRole === "viewer") {
         setIsViewer(true);
         setIsLocked(true);
       }
     }
-  }, [setIsLocked]);
+  }, [boardId, setIsLocked]);
 
   // P1-6: Track recent boards in localStorage so user can always find them
   useEffect(() => {
@@ -158,7 +171,13 @@ export default function BoardPage({ params }: BoardPageProps) {
   const latestElementsRef = useRef(elements);
   const latestVersionRef = useRef(version);
 
-  const collaboration = useSocket(boardId);
+  const collaboration = useSocket(boardId, {
+    onJoinDenied: (_code) => {
+      setIsViewer(true);
+      setIsLocked(true);
+      setIsUnauthenticated(true);
+    }
+  });
 
   useEffect(() => {
     latestElementsRef.current = elements;
@@ -175,6 +194,16 @@ export default function BoardPage({ params }: BoardPageProps) {
       try {
         const board = await getBoard(boardId);
         if (!cancelled) {
+          const currentToken = getToken(boardId);
+          if (!currentToken && board.claimable) {
+            try {
+              await claimBoard(boardId);
+              console.log("claimed this board as owner");
+            } catch (claimErr) {
+              console.warn("Failed to claim board:", claimErr);
+            }
+          }
+
           loadBoard(board.elements, board.version || 0);
           lastSavedSnapshot.current = JSON.stringify(board.elements);
           savedElementsRef.current = new Map(board.elements.map((element) => [element.id, element]));
@@ -194,10 +223,16 @@ export default function BoardPage({ params }: BoardPageProps) {
             localStorage.setItem("whiteboard_recent_boards", JSON.stringify(boards.slice(0, 10)));
           } catch {}
         }
-      } catch (error) {
+      } catch (error: any) {
         if (!cancelled) {
           loadBoard([], 0);
-          console.warn("Could not fetch remote board state, initialized empty canvas:", error);
+          if (error?.status === 401) {
+            setIsViewer(true);
+            setIsLocked(true);
+            setIsUnauthenticated(true);
+          } else {
+            console.warn("Could not fetch remote board state, initialized empty canvas:", error);
+          }
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -207,7 +242,7 @@ export default function BoardPage({ params }: BoardPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [boardId, loadBoard]);
+  }, [boardId, loadBoard, setIsLocked]);
 
   // A2.2: Version-aware autosave with conflict resolution (disabled for viewers)
   useEffect(() => {
@@ -361,18 +396,24 @@ export default function BoardPage({ params }: BoardPageProps) {
     }
   };
 
-  // F2.1: Viewer role check (?role=viewer or remembered in session)
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const sp = new URLSearchParams(window.location.search);
-      const sessionRole = sessionStorage.getItem(`board_role_${boardId}`);
-      if (sp.get("role") === "viewer" || sessionRole === "viewer") {
-        sessionStorage.setItem(`board_role_${boardId}`, "viewer");
-        setIsViewer(true);
-        setIsLocked(true);
+  const handleApplyLink = (input: string) => {
+    const clean = input.trim();
+    if (!clean) return;
+    let token = clean;
+    if (clean.includes("share=")) {
+      try {
+        const parsed = new URL(clean, typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+        token = parsed.searchParams.get("share") || clean;
+      } catch {
+        const match = clean.match(/[?&]share=([^&#]+)/);
+        if (match) token = match[1];
       }
     }
-  }, [boardId, setIsLocked]);
+    setToken(boardId, token);
+    if (typeof window !== "undefined") {
+      window.location.reload();
+    }
+  };
 
   useKeyboardShortcuts({
     onClear: handleClear,
@@ -479,9 +520,10 @@ export default function BoardPage({ params }: BoardPageProps) {
         </button>
       </div>
 
-      {/* Center Tool Area: Hidden/Read-Only in Viewer Mode */}
-      {isViewer ? (
+      {/* Read-Only Banner */}
+      {isViewer && (
         <div
+          className="readonly-banner"
           style={{
             position: "fixed",
             top: "14px",
@@ -497,24 +539,77 @@ export default function BoardPage({ params }: BoardPageProps) {
             fontWeight: 600,
             display: "flex",
             alignItems: "center",
-            gap: "8px",
+            gap: "10px",
             zIndex: 100,
             boxShadow: "0 8px 24px rgba(0,0,0,0.5)"
           }}
         >
-          <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981" }} />
-          <span>Viewing board #{boardId.slice(0, 8)} (Read-only)</span>
-        </div>
-      ) : (
-        <>
-          <Toolbar
-            collaboration={collaboration}
-            onOpenTemplates={() => setIsTemplatesOpen(true)}
-            onOpenAiDiagram={() => setIsAiDiagramOpen(true)}
+          <span
+            style={{
+              width: "8px",
+              height: "8px",
+              borderRadius: "50%",
+              background: isUnauthenticated ? "#f59e0b" : "#10b981"
+            }}
           />
-          <PropertiesPanel collaboration={collaboration} />
-        </>
+          <span>
+            {isUnauthenticated
+              ? "You're viewing this board — ask the owner for edit access."
+              : "You have view-only access to this board."}
+          </span>
+          {isUnauthenticated && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleApplyLink(pastedLinkInput);
+              }}
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginLeft: "4px" }}
+            >
+              <input
+                type="text"
+                placeholder="Have a link?"
+                value={pastedLinkInput}
+                onChange={(e) => setPastedLinkInput(e.target.value)}
+                aria-label="Have a link?"
+                style={{
+                  background: "rgba(255, 255, 255, 0.08)",
+                  border: "1px solid rgba(255, 255, 255, 0.15)",
+                  borderRadius: "6px",
+                  color: "#fff",
+                  fontSize: "11px",
+                  padding: "2px 8px",
+                  width: "110px",
+                  outline: "none"
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  background: "#6366f1",
+                  border: "none",
+                  borderRadius: "6px",
+                  color: "#fff",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  padding: "2px 8px",
+                  cursor: "pointer"
+                }}
+              >
+                Unlock
+              </button>
+            </form>
+          )}
+        </div>
       )}
+
+      {/* Toolbar & Properties */}
+      <Toolbar
+        collaboration={collaboration}
+        onOpenTemplates={() => setIsTemplatesOpen(true)}
+        onOpenAiDiagram={() => setIsAiDiagramOpen(true)}
+        isViewer={isViewer}
+      />
+      {!isViewer && <PropertiesPanel collaboration={collaboration} />}
 
       {/* Top-Right Collaboration & Share Bar */}
       <div className="top-presence-bar">

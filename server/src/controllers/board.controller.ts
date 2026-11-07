@@ -6,6 +6,7 @@ import {
   updateBoard,
   deleteBoard,
   applyBoardOps,
+  claimBoard,
   VersionConflictError
 } from "../services/board.service";
 import {
@@ -14,6 +15,9 @@ import {
   ImageSizeLimitError,
   StorageBackendError
 } from "../utils/storage";
+import { signBoardToken, verifyBoardToken, BoardRole } from "../utils/token";
+import { env } from "../utils/env";
+import type { BoardDocument } from "@shared/types";
 
 function getParamId(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -22,9 +26,86 @@ function getParamId(value: string | string[] | undefined) {
   return value ?? "";
 }
 
-export async function createBoardController(_request: Request, response: Response) {
+export function extractToken(request: Request): string | null {
+  const authHeader = request.headers.authorization;
+  if (authHeader && typeof authHeader === "string") {
+    const parts = authHeader.split(" ");
+    if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
+      const t = parts[1].trim();
+      if (t) return t;
+    }
+  }
+  const queryToken = request.query.token;
+  if (typeof queryToken === "string" && queryToken.trim()) {
+    return queryToken.trim();
+  }
+  const headerToken = request.headers["x-board-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+  return null;
+}
+
+type AuthResult =
+  | { ok: true; board: BoardDocument; role?: BoardRole }
+  | { ok: false };
+
+async function authorizeBoard(
+  request: Request,
+  response: Response,
+  boardId: string,
+  allowedRoles: BoardRole[]
+): Promise<AuthResult> {
+  const board = await getBoard(boardId);
+  if (!board) {
+    response.status(404).json({ error: "Board not found." });
+    return { ok: false };
+  }
+
+  const isClaimed = Boolean(board.ownerId && board.ownerId.trim());
+  const token = extractToken(request);
+
+  if (!isClaimed) {
+    if (token) {
+      const verified = verifyBoardToken(token, boardId);
+      if (verified.valid) {
+        if (!allowedRoles.includes(verified.payload.role)) {
+          response.status(403).json({ error: "Forbidden", code: "FORBIDDEN" });
+          return { ok: false };
+        }
+        return { ok: true, board, role: verified.payload.role };
+      }
+    }
+    if (!allowedRoles.includes("editor")) {
+      response.status(403).json({ error: "Forbidden", code: "FORBIDDEN" });
+      return { ok: false };
+    }
+    return { ok: true, board, role: "editor" };
+  }
+
+  if (!token) {
+    response.status(401).json({ error: "Token required", code: "TOKEN_REQUIRED" });
+    return { ok: false };
+  }
+
+  const verified = verifyBoardToken(token, boardId);
+  if (!verified.valid) {
+    response.status(401).json({ error: "Invalid or expired token", code: "TOKEN_INVALID" });
+    return { ok: false };
+  }
+
+  if (!allowedRoles.includes(verified.payload.role)) {
+    response.status(403).json({ error: "Forbidden", code: "FORBIDDEN" });
+    return { ok: false };
+  }
+
+  return { ok: true, board, role: verified.payload.role };
+}
+
+export async function createBoardController(request: Request, response: Response) {
   try {
-    const board = await createBoard();
+    const isLegacy = request.query.legacy === "true" || Boolean(request.body?.legacy);
+    const board = await createBoard(undefined, isLegacy ? "" : undefined);
     response.status(201).json(board);
   } catch (error) {
     response.status(500).json({
@@ -36,14 +117,12 @@ export async function createBoardController(_request: Request, response: Respons
 export async function getBoardController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
-    const board = await getBoard(boardId);
-
-    if (!board) {
-      response.status(404).json({ error: "Board not found." });
+    const auth = await authorizeBoard(request, response, boardId, ["owner", "editor", "viewer"]);
+    if (!auth.ok) {
       return;
     }
 
-    response.json(board);
+    response.json(auth.board);
   } catch (error) {
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to load board."
@@ -54,9 +133,8 @@ export async function getBoardController(request: Request, response: Response) {
 export async function updateBoardController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
-    const role = (request.query.role as string) || (request.headers["x-board-role"] as string);
-    if (role === "viewer") {
-      response.status(403).json({ error: "Board is in view-only mode." });
+    const auth = await authorizeBoard(request, response, boardId, ["owner", "editor"]);
+    if (!auth.ok) {
       return;
     }
 
@@ -97,6 +175,11 @@ export async function updateBoardController(request: Request, response: Response
 export async function applyBoardOpsController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
+    const auth = await authorizeBoard(request, response, boardId, ["owner", "editor"]);
+    if (!auth.ok) {
+      return;
+    }
+
     const { ops, op, element, version } = request.body;
 
     let opList = ops;
@@ -131,6 +214,56 @@ export async function applyBoardOpsController(request: Request, response: Respon
 
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to apply operations."
+    });
+  }
+}
+
+export async function claimBoardController(request: Request, response: Response) {
+  try {
+    const boardId = getParamId(request.params.id);
+    const result = await claimBoard(boardId);
+    if (!result) {
+      response.status(404).json({ error: "Board not found." });
+      return;
+    }
+    response.json(result);
+  } catch (error: any) {
+    if (error?.message === "ALREADY_CLAIMED") {
+      response.status(409).json({ error: "Board is already claimed.", code: "ALREADY_CLAIMED" });
+      return;
+    }
+    response.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to claim board."
+    });
+  }
+}
+
+export async function shareBoardController(request: Request, response: Response) {
+  try {
+    const boardId = getParamId(request.params.id);
+    const auth = await authorizeBoard(request, response, boardId, ["owner"]);
+    if (!auth.ok) {
+      return;
+    }
+
+    const requestedRole = request.body?.role;
+    if (requestedRole !== "editor" && requestedRole !== "viewer") {
+      response.status(400).json({ error: "Role must be 'editor' or 'viewer'." });
+      return;
+    }
+
+    let ttlHours = typeof request.body?.ttlHours === "number" ? request.body.ttlHours : 168;
+    if (ttlHours > 720) ttlHours = 720;
+    if (ttlHours < 0) ttlHours = 0;
+
+    const token = signBoardToken(boardId, requestedRole, ttlHours);
+    const clientOrigin = env.clientOrigin;
+    const url = `${clientOrigin}/board/${boardId}?share=${token}`;
+
+    response.json({ token, url });
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to create share link."
     });
   }
 }
@@ -209,9 +342,8 @@ export async function cleanBoardController(request: Request, response: Response)
 export async function deleteBoardController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
-    const role = (request.query.role as string) || (request.headers["x-board-role"] as string);
-    if (role === "viewer") {
-      response.status(403).json({ error: "Cannot delete board in view-only mode." });
+    const auth = await authorizeBoard(request, response, boardId, ["owner", "editor"]);
+    if (!auth.ok) {
       return;
     }
 

@@ -1,6 +1,25 @@
 import dotenv from "dotenv";
+import crypto from "crypto";
 
 dotenv.config();
+
+let randomBoardSecret: string | null = null;
+let hasWarnedSecret = false;
+
+function getBoardSecret(): string {
+  const secret = process.env.BOARD_SECRET?.trim();
+  if (secret) {
+    return secret;
+  }
+  if (!randomBoardSecret) {
+    randomBoardSecret = crypto.randomBytes(32).toString("hex");
+    if (!hasWarnedSecret) {
+      hasWarnedSecret = true;
+      console.warn("⚠️  BOARD_SECRET unset; generated random secret for this session. Tokens will not survive a restart.");
+    }
+  }
+  return randomBoardSecret;
+}
 
 const defaultOrigins = [
   "http://localhost:3000",
@@ -45,7 +64,11 @@ function validateEnv() {
     port,
     mongoUri,
     hfToken: process.env.HF_TOKEN ?? "",
+    clientOrigin: configuredOrigins[0] || "http://localhost:3000",
     clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins,
+    get boardSecret(): string {
+      return getBoardSecret();
+    },
     get blobReadWriteToken(): string {
       return process.env.BLOB_READ_WRITE_TOKEN?.trim() || "";
     },

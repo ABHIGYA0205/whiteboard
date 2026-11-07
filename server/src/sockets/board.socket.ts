@@ -1,5 +1,6 @@
 import type { Server, Socket } from "socket.io";
 import { getBoard, updateBoard, deleteBoard } from "../services/board.service";
+import { verifyBoardToken } from "../utils/token";
 import type { PresenceUser, WhiteboardElement } from "@shared/types";
 
 const PALETTE = [
@@ -134,16 +135,48 @@ export function registerBoardSocket(io: Server, socket: Socket) {
     async ({
       boardId,
       userName: customName,
-      role
+      token
     }: {
       boardId: string;
       userName?: string;
-      role?: string;
+      token?: string;
     }) => {
       if (!boardId || typeof boardId !== "string") return;
 
-      if (role === "viewer" || socket.handshake.auth.role === "viewer") {
-        socket.data.isViewer = true;
+      const board = await getBoard(boardId);
+      const isClaimed = Boolean(board?.ownerId && board.ownerId.trim());
+      const candidateToken = token || (socket.handshake.auth?.token as string | undefined);
+
+      if (!isClaimed) {
+        if (candidateToken) {
+          const verified = verifyBoardToken(candidateToken, boardId);
+          if (verified.valid) {
+            socket.data.role = verified.payload.role;
+            socket.data.isViewer = verified.payload.role === "viewer";
+          } else {
+            socket.data.role = "editor";
+            socket.data.isViewer = false;
+          }
+        } else {
+          socket.data.role = "editor";
+          socket.data.isViewer = false;
+        }
+      } else {
+        if (!candidateToken) {
+          socket.leave(boardId);
+          socket.emit("join-denied", { boardId, code: "TOKEN_REQUIRED" });
+          return;
+        }
+
+        const verified = verifyBoardToken(candidateToken, boardId);
+        if (!verified.valid) {
+          socket.leave(boardId);
+          socket.emit("join-denied", { boardId, code: "TOKEN_INVALID" });
+          return;
+        }
+
+        socket.data.role = verified.payload.role;
+        socket.data.isViewer = verified.payload.role === "viewer";
       }
 
       if (customName && typeof customName === "string" && customName.trim()) {

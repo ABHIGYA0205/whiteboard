@@ -111,9 +111,10 @@ type ToolbarProps = {
   };
   onOpenTemplates?: () => void;
   onOpenAiDiagram?: () => void;
+  isViewer?: boolean;
 };
 
-export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: ToolbarProps) {
+export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isViewer = false }: ToolbarProps) {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceProgress, setEnhanceProgress] = useState(0);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
@@ -180,6 +181,14 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
   const togglePropertiesOpen = useBoardStore((state) => state.togglePropertiesOpen);
   const clearBoard = useBoardStore((state) => state.clearBoard);
   const viewport = useBoardStore((state) => state.viewport);
+
+  useEffect(() => {
+    if (isViewer && tool !== "select" && tool !== "pan") {
+      setTool("select");
+    }
+  }, [isViewer, tool, setTool]);
+
+  const isToolDisabled = (toolId: string) => isViewer && toolId !== "select" && toolId !== "pan";
 
   // A6.4: Image Tool upload handler
   const handleImageFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -441,7 +450,14 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
             <button
               className={`tool-button ${tool === option.id ? "active" : ""}`}
               key={option.id}
+              disabled={isToolDisabled(option.id)}
+              style={
+                isToolDisabled(option.id)
+                  ? { opacity: 0.35, cursor: "not-allowed" }
+                  : undefined
+              }
               onClick={() => {
+                if (isToolDisabled(option.id)) return;
                 if (option.id === "image") {
                   imageInputRef.current?.click();
                 } else {
@@ -569,7 +585,16 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
             <button
               className={`tool-button ${tool === option.id ? "active" : ""}`}
               key={option.id}
-              onClick={() => setTool(option.id)}
+              disabled={isToolDisabled(option.id)}
+              style={
+                isToolDisabled(option.id)
+                  ? { opacity: 0.35, cursor: "not-allowed" }
+                  : undefined
+              }
+              onClick={() => {
+                if (isToolDisabled(option.id)) return;
+                setTool(option.id);
+              }}
               title={`${option.label} (${option.shortcut})`}
               aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
             >
@@ -634,7 +659,14 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
                     <button
                       key={option.id}
                       className={`more-tool-item ${tool === option.id ? "active" : ""}`}
+                      disabled={isToolDisabled(option.id)}
+                      style={
+                        isToolDisabled(option.id)
+                          ? { opacity: 0.35, cursor: "not-allowed" }
+                          : undefined
+                      }
                       onClick={() => {
+                        if (isToolDisabled(option.id)) return;
                         setIsMoreOpen(false);
                         if (option.id === "image") {
                           imageInputRef.current?.click();

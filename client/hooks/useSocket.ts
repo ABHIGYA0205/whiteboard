@@ -1,6 +1,7 @@
 "use client";
 
 import { useBoardStore, registerResyncHandler } from "@/store/boardStore";
+import { getToken } from "@/lib/boardAuth";
 import type {
   CursorPosition,
   DrawEventPayload,
@@ -39,7 +40,10 @@ export const getLocalUserId = () => {
   return id;
 };
 
-export function useSocket(boardId: string) {
+export function useSocket(
+  boardId: string,
+  options?: { onJoinDenied?: (code: string) => void }
+) {
   const upsertRemoteElement = useBoardStore((state) => state.upsertRemoteElement);
   const upsertRemoteCursor = useBoardStore((state) => state.upsertRemoteCursor);
   const removeRemoteCursor = useBoardStore((state) => state.removeRemoteCursor);
@@ -71,7 +75,12 @@ export function useSocket(boardId: string) {
           typeof window !== "undefined"
             ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
             : null;
-        socketRef.current.emit("join-board", { boardId, userName: currentName || undefined });
+        const currentToken = getToken(boardId);
+        socketRef.current.emit("join-board", {
+          boardId,
+          userName: currentName || undefined,
+          token: currentToken || undefined
+        });
       }
     };
   }, [boardId]);
@@ -90,6 +99,7 @@ export function useSocket(boardId: string) {
         typeof window !== "undefined"
           ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
           : null;
+      const initialToken = getToken(boardId);
 
       // Ensure local user ID is immediately registered in Zustand store
       setCurrentUserId(localId);
@@ -107,7 +117,8 @@ export function useSocket(boardId: string) {
         timeout: 20000,
         auth: {
           userId: localId,
-          name: storedName || undefined
+          name: storedName || undefined,
+          token: initialToken || undefined
         }
       });
       socketRef.current = activeSocket;
@@ -116,6 +127,13 @@ export function useSocket(boardId: string) {
         if (identity?.userId) {
           setCurrentUserId(identity.userId);
         }
+      };
+
+      const handleJoinDenied = ({ boardId: deniedId, code }: { boardId: string; code: string }) => {
+        if (deniedId !== boardId) return;
+        console.log(`join denied: ${code}`);
+        useBoardStore.getState().setIsLocked(true);
+        options?.onJoinDenied?.(code);
       };
 
       // Reconnect / state sync (A2.4)
@@ -222,6 +240,7 @@ export function useSocket(boardId: string) {
 
       // Register all listeners BEFORE emitting join/request-state
       activeSocket.on("identity", handleIdentity);
+      activeSocket.on("join-denied", handleJoinDenied);
       activeSocket.on("board:state", handleBoardState);
       activeSocket.on("draw", handleDraw);
       activeSocket.on("draw-progress", handleDrawProgress);
@@ -243,7 +262,12 @@ export function useSocket(boardId: string) {
           typeof window !== "undefined"
             ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
             : null;
-        activeSocket?.emit("join-board", { boardId, userName: currentName || undefined });
+        const currentToken = getToken(boardId);
+        activeSocket?.emit("join-board", {
+          boardId,
+          userName: currentName || undefined,
+          token: currentToken || undefined
+        });
         activeSocket?.emit("request-state", { boardId });
       };
 
@@ -255,6 +279,7 @@ export function useSocket(boardId: string) {
       return () => {
         activeSocket?.emit("leave-board", { boardId });
         activeSocket?.off("identity", handleIdentity);
+        activeSocket?.off("join-denied", handleJoinDenied);
         activeSocket?.off("connect", join);
         activeSocket?.off("board:state", handleBoardState);
         activeSocket?.off("draw", handleDraw);
@@ -336,13 +361,16 @@ export function useSocket(boardId: string) {
   return useMemo(
     () => ({
       emitDraw(element: WhiteboardElement) {
+        if (useBoardStore.getState().isLocked) return;
         socketRef.current?.emit("draw", { boardId, element });
       },
       emitDrawProgress(progress: Omit<DrawProgressPayload, "boardId">) {
+        if (useBoardStore.getState().isLocked) return;
         if (!progress.points.length) return;
         socketRef.current?.emit("draw-progress", { boardId, ...progress });
       },
       emitElementUpdate(element: WhiteboardElement) {
+        if (useBoardStore.getState().isLocked) return;
         socketRef.current?.emit("update-element", { boardId, element });
       },
       // A6.3: Cursor throttle with trailing send guarantee
@@ -386,12 +414,15 @@ export function useSocket(boardId: string) {
         });
       },
       emitClear() {
+        if (useBoardStore.getState().isLocked) return;
         socketRef.current?.emit("clear-board", { boardId });
       },
       emitDeleteBoard() {
+        if (useBoardStore.getState().isLocked) return;
         socketRef.current?.emit("delete-board", { boardId });
       },
       emitReplace(elements: WhiteboardElement[]) {
+        if (useBoardStore.getState().isLocked) return;
         const { version, deletedElementIds } = useBoardStore.getState();
         socketRef.current?.emit("replace-elements", {
           boardId,
@@ -401,6 +432,7 @@ export function useSocket(boardId: string) {
         });
       },
       emitLaser(point: { x: number; y: number }, color?: string) {
+        if (useBoardStore.getState().isLocked) return;
         socketRef.current?.emit("laser-point", { boardId, point, color });
       },
       emitUpdateUserName(name: string) {

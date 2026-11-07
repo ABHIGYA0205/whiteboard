@@ -1,5 +1,7 @@
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
 import { sameElement } from "@shared/collab";
+import { getToken, setToken, clearToken } from "./boardAuth";
+import { useBoardStore } from "@/store/boardStore";
 
 export const getApiUrl = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -23,18 +25,47 @@ export function resolveImageUrl(url?: string): string {
   return `${baseUrl}${cleanPath}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, explicitBoardId?: string): Promise<T> {
   const baseUrl = getApiUrl();
   const url = path.startsWith("http") ? path : `${baseUrl}${path}`;
+
+  let boardId = explicitBoardId;
+  if (!boardId) {
+    const match = path.match(/^\/board\/([^/?]+)/);
+    if (match && match[1] !== "upload" && match[1] !== "clean") {
+      boardId = match[1];
+    }
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> ?? {})
+  };
+
+  if (boardId) {
+    const token = getToken(boardId);
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+
   const response = await fetch(url, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
+    headers
   });
 
   if (!response.ok) {
+    if (response.status === 401 && boardId) {
+      clearToken(boardId);
+      if (typeof window !== "undefined") {
+        try {
+          useBoardStore.getState().setIsLocked(true);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     let message = `Request failed with status ${response.status}`;
     try {
       const body = await response.json();
@@ -52,9 +83,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function createBoard(): Promise<BoardDocument> {
   try {
-    return await request<BoardDocument>("/board", {
+    const board = await request<BoardDocument & { ownerToken?: string }>("/board", {
       method: "POST"
     });
+    if (board.id && board.ownerToken) {
+      setToken(board.id, board.ownerToken);
+    }
+    return board;
   } catch (error) {
     console.warn("Backend createBoard failed, providing local session board:", error);
     const localId =
@@ -72,10 +107,42 @@ export async function createBoard(): Promise<BoardDocument> {
   }
 }
 
+export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument }> {
+  const result = await request<{ ownerToken: string; board: BoardDocument }>(
+    `/board/${id}/claim`,
+    {
+      method: "POST"
+    },
+    id
+  );
+  if (result.ownerToken) {
+    setToken(id, result.ownerToken);
+  }
+  return result;
+}
+
+export function createShareLink(
+  id: string,
+  role: "editor" | "viewer",
+  ttlHours?: number
+): Promise<{ token: string; url: string }> {
+  return request<{ token: string; url: string }>(
+    `/board/${id}/share`,
+    {
+      method: "POST",
+      body: JSON.stringify({ role, ttlHours })
+    },
+    id
+  );
+}
+
 export async function getBoard(id: string): Promise<BoardDocument> {
   try {
-    return await request<BoardDocument>(`/board/${id}`);
-  } catch (error) {
+    return await request<BoardDocument>(`/board/${id}`, undefined, id);
+  } catch (error: any) {
+    if (error?.status === 401) {
+      throw error;
+    }
     console.warn(`Backend getBoard(${id}) failed, providing fallback:`, error);
     return {
       id,
@@ -96,14 +163,14 @@ export function saveBoard(
   return request<BoardDocument>(`/board/${id}`, {
     method: "PUT",
     body: JSON.stringify({ elements, version, deletedIds })
-  });
+  }, id);
 }
 
 export function saveBoardOps(id: string, ops: BoardOp[], version?: number) {
   return request<BoardDocument>(`/board/${id}/ops`, {
     method: "POST",
     body: JSON.stringify({ ops, version })
-  });
+  }, id);
 }
 
 /**
@@ -155,7 +222,7 @@ export function clearBoardRemote(id: string) {
 export function deleteBoardRemote(id: string) {
   return request<{ success: boolean; message?: string }>(`/board/${id}`, {
     method: "DELETE"
-  });
+  }, id);
 }
 
 export async function uploadImage(imageBase64: string): Promise<{ url: string }> {
