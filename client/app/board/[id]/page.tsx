@@ -409,9 +409,10 @@ export default function BoardPage({ params }: BoardPageProps) {
           onDeleteBoard={handleDeleteBoard}
           onShowShortcuts={() => setIsShortcutsOpen(true)}
         />
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "2px" }}>
+        <div className="board-title-group" style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "2px" }}>
           <CanvasFlowLogo size={20} style={{ opacity: 0.9 }} />
           <input
+            className="board-title-input"
             value={boardTitle}
             onChange={(e) => handleTitleChange(e.target.value)}
             disabled={isViewer}
@@ -425,7 +426,8 @@ export default function BoardPage({ params }: BoardPageProps) {
               fontSize: "13px",
               padding: "4px 8px",
               borderRadius: "6px",
-              maxWidth: "160px",
+              width: "130px",
+              maxWidth: "30vw",
               outline: "none",
               cursor: isViewer ? "default" : "text",
               textOverflow: "ellipsis",

@@ -174,6 +174,9 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
           color: textColor
         }}
       >
+        {/* Mobile/Tablet Drag Handle */}
+        <div className="properties-drag-handle" />
+
         {/* Header with Title and Close button */}
         <div
           style={{
@@ -207,6 +210,8 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
             <X size={15} />
           </button>
         </div>
+
+        <div className="properties-sections-grid" style={{ display: "flex", flexDirection: "column", gap: "14px", paddingBottom: "24px" }}>
       {/* 1. STROKE COLOR */}
       {(() => {
         const isCustomStroke = !strokeSwatches.some((s) => s.color.toLowerCase() === currentStroke.toLowerCase());
@@ -235,6 +240,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
                 return (
                   <button
                     key={s.color}
+                    className="color-swatch-btn"
                     onClick={() => updateProperty(() => setStrokeColor(s.color))}
                     title={s.label}
                     aria-label={`Stroke color ${s.label}`}
@@ -328,6 +334,7 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
                 return (
                   <button
                     key={s.color}
+                    className="color-swatch-btn"
                     onClick={() => updateProperty(() => setFillColor(s.color))}
                     title={s.label}
                     aria-label={`Fill color ${s.label}`}
@@ -764,7 +771,8 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
           </div>
         </div>
       )}
-    </aside>
+        </div>
+      </aside>
   </>
 );
 }

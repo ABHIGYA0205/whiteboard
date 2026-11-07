@@ -33,7 +33,8 @@ import {
   LayoutTemplate,
   Workflow,
   Check,
-  Diamond
+  Diamond,
+  MoreHorizontal
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -51,6 +52,25 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   eraser: <Eraser size={18} />,
   laser: <Crosshair size={18} />
 };
+
+const PRIMARY_TOOLS = [
+  { id: "select", label: "Selection", shortcut: "V" },
+  { id: "pan", label: "Hand (Panning tool)", shortcut: "H" },
+  { id: "pencil", label: "Draw", shortcut: "P" },
+  { id: "rectangle", label: "Rectangle", shortcut: "R" },
+  { id: "arrow", label: "Arrow", shortcut: "A" },
+  { id: "text", label: "Text", shortcut: "T" }
+] as const;
+
+const SECONDARY_TOOLS = [
+  { id: "circle", label: "Ellipse", shortcut: "O" },
+  { id: "diamond", label: "Diamond", shortcut: "D" },
+  { id: "line", label: "Line", shortcut: "L" },
+  { id: "sticky", label: "Sticky Note", shortcut: "N" },
+  { id: "image", label: "Insert Image", shortcut: "I" },
+  { id: "eraser", label: "Eraser", shortcut: "E" },
+  { id: "laser", label: "Laser Pointer", shortcut: "K" }
+] as const;
 
 const getPaletteColors = (theme: "dark" | "light") => [
   { name: theme === "light" ? "Black" : "White", value: theme === "light" ? "#1e293b" : "#ececf1" },
@@ -109,13 +129,19 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
   const [modalCluster, setModalCluster] = useState<WhiteboardElement[]>([]);
   const [modalBounds, setModalBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const moreDropdownRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowStyleMenu(false);
+      }
+      if (moreDropdownRef.current && !moreDropdownRef.current.contains(event.target as Node)) {
+        setIsMoreOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -398,141 +424,289 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram }: Too
       />
 
       <nav className="top-toolbar" aria-label="Drawing tools and controls">
-        <button
-          className={`tool-button ${isLocked ? "active" : ""}`}
-          title={isLocked ? "Unlock Canvas" : "Lock Canvas"}
-          aria-label={isLocked ? "Unlock Canvas" : "Lock Canvas"}
-          onClick={() => setIsLocked(!isLocked)}
-        >
-          <Lock size={16} />
-        </button>
-
-        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
-
-        {TOOL_OPTIONS.map((option) => (
+        {/* Desktop View (> 1024px) */}
+        <div className="toolbar-desktop-view">
           <button
-            className={`tool-button ${tool === option.id ? "active" : ""}`}
-            key={option.id}
-            onClick={() => {
-              if (option.id === "image") {
-                imageInputRef.current?.click();
-              } else {
-                setTool(option.id);
-              }
-            }}
-            title={`${option.label} (${option.shortcut})`}
-            aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
+            className={`tool-button ${isLocked ? "active" : ""}`}
+            title={isLocked ? "Unlock Canvas" : "Lock Canvas"}
+            aria-label={isLocked ? "Unlock Canvas" : "Lock Canvas"}
+            onClick={() => setIsLocked(!isLocked)}
           >
-            {TOOL_ICONS[option.id]}
-            <span className="tool-shortcut">{option.shortcut}</span>
-          </button>
-        ))}
-
-        {/* Integrated Style & Color Properties Button */}
-        <button
-          className={`tool-button ${isPropertiesOpen ? "active" : ""}`}
-          onClick={() => togglePropertiesOpen()}
-          title="Style & Properties (S)"
-          aria-label="Toggle stroke and fill properties"
-          aria-expanded={isPropertiesOpen}
-          style={{ position: "relative" }}
-        >
-          <Palette size={16} />
-          <span
-            style={{
-              position: "absolute",
-              bottom: "4px",
-              right: "4px",
-              width: "7px",
-              height: "7px",
-              borderRadius: "50%",
-              backgroundColor: strokeColor === "transparent" ? "#94a3b8" : strokeColor,
-              border: "1.5px solid #181824"
-            }}
-          />
-        </button>
-
-        <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
-
-        {/* AI Enhancer and Style Selector */}
-        <div className="ai-enhancer-group" ref={dropdownRef}>
-          <button
-            className={`ai-trigger-button ${isEnhancing ? "enhancing" : ""}`}
-            onClick={handleEnhance}
-            disabled={isEnhancing}
-            title={`Enhance sketch with AI (${selectedStyle.label})`}
-            aria-label={`Enhance sketch with AI using ${selectedStyle.label}`}
-          >
-            <Sparkles size={14} className="ai-sparkle-icon" />
-            <span className="ai-btn-text">Enhance</span>
-            <span className="ai-style-pill">{selectedStyle.label}</span>
+            <Lock size={16} />
           </button>
 
+          <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
+
+          {TOOL_OPTIONS.map((option) => (
+            <button
+              className={`tool-button ${tool === option.id ? "active" : ""}`}
+              key={option.id}
+              onClick={() => {
+                if (option.id === "image") {
+                  imageInputRef.current?.click();
+                } else {
+                  setTool(option.id);
+                }
+              }}
+              title={`${option.label} (${option.shortcut})`}
+              aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
+            >
+              {TOOL_ICONS[option.id]}
+              <span className="tool-shortcut">{option.shortcut}</span>
+            </button>
+          ))}
+
+          {/* Integrated Style & Color Properties Button */}
           <button
-            className={`ai-dropdown-trigger ${showStyleMenu ? "active" : ""}`}
-            disabled={isEnhancing}
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowStyleMenu(!showStyleMenu);
-            }}
-            title="Select AI Art Style Preset"
-            aria-label="Select AI Art Style Preset"
-            aria-expanded={showStyleMenu}
+            className={`tool-button ${isPropertiesOpen ? "active" : ""}`}
+            onClick={() => togglePropertiesOpen()}
+            title="Style & Properties (S)"
+            aria-label="Toggle stroke and fill properties"
+            aria-expanded={isPropertiesOpen}
+            style={{ position: "relative" }}
           >
-            <ChevronDown size={13} className={`chevron-icon ${showStyleMenu ? "rotate" : ""}`} />
+            <Palette size={16} />
+            <span
+              style={{
+                position: "absolute",
+                bottom: "4px",
+                right: "4px",
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                backgroundColor: strokeColor === "transparent" ? "#94a3b8" : strokeColor,
+                border: "1.5px solid #181824"
+              }}
+            />
           </button>
 
-          {showStyleMenu && (
-            <div className="style-dropdown-menu" role="menu" aria-label="AI Style presets">
-              <div className="style-dropdown-header">AI Art Style Preset</div>
-              <div className="style-dropdown-list">
-                {ENHANCE_STYLES.map((style) => {
-                  const isSelected = selectedStyle.id === style.id;
-                  return (
-                    <button
-                      key={style.id}
-                      className={`style-dropdown-item ${isSelected ? "active" : ""}`}
-                      onClick={() => {
-                        setSelectedStyle(style);
-                        setShowStyleMenu(false);
-                      }}
-                      role="menuitem"
-                      aria-label={style.label}
-                    >
-                      <span className="style-icon">{STYLE_ICONS[style.id]}</span>
-                      <div className="style-info">
-                        <span className="style-name">{style.label}</span>
-                        <span className="style-desc">{style.promptSuffix.split(",")[0]}</span>
-                      </div>
-                      {isSelected && <Check size={14} className="style-check-icon" />}
-                    </button>
-                  );
-                })}
+          <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
+
+          {/* AI Enhancer and Style Selector */}
+          <div className="ai-enhancer-group" ref={dropdownRef}>
+            <button
+              className={`ai-trigger-button ${isEnhancing ? "enhancing" : ""}`}
+              onClick={handleEnhance}
+              disabled={isEnhancing}
+              title={`Enhance sketch with AI (${selectedStyle.label})`}
+              aria-label={`Enhance sketch with AI using ${selectedStyle.label}`}
+            >
+              <Sparkles size={14} className="ai-sparkle-icon" />
+              <span className="ai-btn-text">Enhance</span>
+              <span className="ai-style-pill">{selectedStyle.label}</span>
+            </button>
+
+            <button
+              className={`ai-dropdown-trigger ${showStyleMenu ? "active" : ""}`}
+              disabled={isEnhancing}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowStyleMenu(!showStyleMenu);
+              }}
+              title="Select AI Art Style Preset"
+              aria-label="Select AI Art Style Preset"
+              aria-expanded={showStyleMenu}
+            >
+              <ChevronDown size={13} className={`chevron-icon ${showStyleMenu ? "rotate" : ""}`} />
+            </button>
+
+            {showStyleMenu && (
+              <div className="style-dropdown-menu" role="menu" aria-label="AI Style presets">
+                <div className="style-dropdown-header">AI Art Style Preset</div>
+                <div className="style-dropdown-list">
+                  {ENHANCE_STYLES.map((style) => {
+                    const isSelected = selectedStyle.id === style.id;
+                    return (
+                      <button
+                        key={style.id}
+                        className={`style-dropdown-item ${isSelected ? "active" : ""}`}
+                        onClick={() => {
+                          setSelectedStyle(style);
+                          setShowStyleMenu(false);
+                        }}
+                        role="menuitem"
+                        aria-label={style.label}
+                      >
+                        <span className="style-icon">{STYLE_ICONS[style.id]}</span>
+                        <div className="style-info">
+                          <span className="style-name">{style.label}</span>
+                          <span className="style-desc">{style.promptSuffix.split(",")[0]}</span>
+                        </div>
+                        {isSelected && <Check size={14} className="style-check-icon" />}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+
+          {/* Templates gallery button */}
+          <button
+            className="tool-button"
+            onClick={onOpenTemplates}
+            title="Whiteboard Templates (Flowchart, Kanban, Retro, Mind Map)"
+            aria-label="Open Whiteboard Templates"
+          >
+            <LayoutTemplate size={16} />
+          </button>
+
+          {/* AI Prompt to Diagram button */}
+          <button
+            className="tool-button"
+            onClick={onOpenAiDiagram}
+            title="AI Prompt → Editable Diagram"
+            aria-label="Generate editable diagram from text prompt"
+            style={{ color: "#a5b4fc" }}
+          >
+            <Workflow size={16} />
+          </button>
         </div>
 
-        {/* Templates gallery button */}
-        <button
-          className="tool-button"
-          onClick={onOpenTemplates}
-          title="Whiteboard Templates (Flowchart, Kanban, Retro, Mind Map)"
-          aria-label="Open Whiteboard Templates"
-        >
-          <LayoutTemplate size={16} />
-        </button>
+        {/* Mobile & Tablet View (<= 1024px) */}
+        <div className="toolbar-mobile-view">
+          {PRIMARY_TOOLS.map((option) => (
+            <button
+              className={`tool-button ${tool === option.id ? "active" : ""}`}
+              key={option.id}
+              onClick={() => setTool(option.id)}
+              title={`${option.label} (${option.shortcut})`}
+              aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
+            >
+              {TOOL_ICONS[option.id]}
+            </button>
+          ))}
 
-        {/* AI Prompt to Diagram button */}
-        <button
-          className="tool-button"
-          onClick={onOpenAiDiagram}
-          title="AI Prompt → Editable Diagram"
-          aria-label="Generate editable diagram from text prompt"
-          style={{ color: "#a5b4fc" }}
-        >
-          <Workflow size={16} />
-        </button>
+          {/* Style & Properties Button */}
+          <button
+            className={`tool-button ${isPropertiesOpen ? "active" : ""}`}
+            onClick={() => togglePropertiesOpen()}
+            title="Style & Properties (S)"
+            aria-label="Toggle stroke and fill properties"
+            aria-expanded={isPropertiesOpen}
+            style={{ position: "relative" }}
+          >
+            <Palette size={16} />
+            <span
+              style={{
+                position: "absolute",
+                bottom: "4px",
+                right: "4px",
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                backgroundColor: strokeColor === "transparent" ? "#94a3b8" : strokeColor,
+                border: "1.5px solid #181824"
+              }}
+            />
+          </button>
+
+          {/* More Tools Popover */}
+          <div className="more-menu-wrapper" ref={moreDropdownRef} style={{ position: "relative" }}>
+            <button
+              className={`tool-button tool-more-btn ${isMoreOpen || SECONDARY_TOOLS.some((t) => t.id === tool) ? "active" : ""}`}
+              onClick={() => setIsMoreOpen(!isMoreOpen)}
+              title="More Tools"
+              aria-label="More tools and actions"
+              aria-expanded={isMoreOpen}
+            >
+              <MoreHorizontal size={18} />
+              {SECONDARY_TOOLS.some((t) => t.id === tool) && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "3px",
+                    right: "3px",
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    backgroundColor: "#818cf8"
+                  }}
+                />
+              )}
+            </button>
+
+            {isMoreOpen && (
+              <div className="more-tools-popover" role="menu" aria-label="More whiteboard tools">
+                <div className="more-tools-header">More Tools</div>
+                <div className="more-tools-grid">
+                  {SECONDARY_TOOLS.map((option) => (
+                    <button
+                      key={option.id}
+                      className={`more-tool-item ${tool === option.id ? "active" : ""}`}
+                      onClick={() => {
+                        setIsMoreOpen(false);
+                        if (option.id === "image") {
+                          imageInputRef.current?.click();
+                        } else {
+                          setTool(option.id);
+                        }
+                      }}
+                      title={`${option.label} (${option.shortcut})`}
+                      aria-label={`${option.label} tool, shortcut ${option.shortcut}`}
+                    >
+                      <span className="more-tool-icon">{TOOL_ICONS[option.id]}</span>
+                      <span className="more-tool-label">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="more-tools-divider" />
+
+                <div className="more-tools-actions">
+                  <button
+                    className={`more-action-item ${isLocked ? "active" : ""}`}
+                    onClick={() => {
+                      setIsLocked(!isLocked);
+                      setIsMoreOpen(false);
+                    }}
+                    aria-label={isLocked ? "Unlock Canvas" : "Lock Canvas"}
+                  >
+                    <Lock size={15} />
+                    <span>{isLocked ? "Unlock Canvas" : "Lock Canvas"}</span>
+                  </button>
+
+                  <button
+                    className="more-action-item"
+                    onClick={() => {
+                      onOpenTemplates?.();
+                      setIsMoreOpen(false);
+                    }}
+                    aria-label="Open Whiteboard Templates"
+                  >
+                    <LayoutTemplate size={15} />
+                    <span>Templates</span>
+                  </button>
+
+                  <button
+                    className="more-action-item"
+                    onClick={() => {
+                      onOpenAiDiagram?.();
+                      setIsMoreOpen(false);
+                    }}
+                    aria-label="AI Prompt to Diagram"
+                  >
+                    <Workflow size={15} />
+                    <span>AI Diagram</span>
+                  </button>
+
+                  <button
+                    className="more-action-item"
+                    onClick={() => {
+                      handleEnhance();
+                      setIsMoreOpen(false);
+                    }}
+                    disabled={isEnhancing}
+                    aria-label="Enhance sketch with AI"
+                  >
+                    <Sparkles size={15} />
+                    <span>AI Enhance</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </nav>
 
       {/* Single clean floating progress toast below the toolbar */}

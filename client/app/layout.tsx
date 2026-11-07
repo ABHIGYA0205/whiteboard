@@ -22,8 +22,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // Pinch-to-zoom allowed for mobile accessibility
   themeColor: "#010409"
 };
 

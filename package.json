@@ -19,5 +19,8 @@
   },
   "dependencies": {
     "@huggingface/inference": "^4.13.26"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.0"
   }
 }
