@@ -5,25 +5,173 @@ import { saveBase64Image } from "../utils/storage";
 
 export const aiRouter = Router();
 
-const HORDE_BASE = "https://stablehorde.net/api/v2";
+const HORDE_BASE = "https://aihorde.net/api/v2";
 const ANON_KEY = "0000000000";
 
-// A4.4: In-memory cache for generation results
-const resultCache = new Map<string, string>();
+export const DEFAULT_NEGATIVE_PROMPT =
+  "blurry, low quality, jpeg artifacts, watermark, text, signature, extra limbs, extra fingers, duplicate person, two people, cropped, deformed, sketch lines, rough pencil strokes";
 
-// A4.3: In-memory Job store
-type JobStatus = {
+export const STYLE_PRESETS: Record<string, string> = {
+  digital: "vibrant digital art, trending on artstation, detailed illustration",
+  photo: "photorealistic, hyperrealistic 8k resolution, cinematic lighting",
+  "3d": "3D isometric render, blender octane render, soft ambient lighting",
+  anime: "makoto shinkai aesthetic, high quality anime artwork, vibrant colors",
+  cyberpunk: "cyberpunk neon aesthetic, moody lighting, futuristic city details",
+  watercolor: "delicate watercolor painting, artistic paper texture, soft gradients",
+  vector: "clean modern vector illustration, minimalist, flat colors"
+};
+
+export class PromptResult extends String {
+  prompt: string;
+  negativePrompt: string;
+  enhance: boolean;
+  composition: string;
+  qualityTail: string;
+
+  constructor(
+    prompt: string,
+    negativePrompt: string,
+    enhance: boolean,
+    composition: string,
+    qualityTail: string
+  ) {
+    super(prompt);
+    this.prompt = prompt;
+    this.negativePrompt = negativePrompt;
+    this.enhance = enhance;
+    this.composition = composition;
+    this.qualityTail = qualityTail;
+  }
+}
+
+export function buildPrompt(
+  rawPrompt: string,
+  options?: {
+    aspect?: "square" | "portrait" | "landscape" | null;
+    styleId?: string;
+    hasSketch?: boolean;
+    negativePrompt?: string;
+  }
+): PromptResult {
+  // First sentence only, max 200 chars, cleaned
+  const trimmed = (rawPrompt || "").trim();
+  const firstSentenceMatch = trimmed.match(/^([^.\n]+)/);
+  const subject = (firstSentenceMatch ? firstSentenceMatch[1] : trimmed).slice(0, 200).trim();
+
+  let composition = "";
+  if (options?.aspect === "portrait") {
+    composition = "full-body vertical composition";
+  } else if (options?.aspect === "landscape") {
+    composition = "wide landscape composition";
+  }
+
+  const qualityTail = "detailed, coherent anatomy, single subject, clean line art to illustration";
+
+  const styleSuffix = options?.styleId ? STYLE_PRESETS[options.styleId] || "" : "";
+
+  const parts = [subject, composition, styleSuffix, qualityTail].filter(Boolean);
+  const fullPrompt = parts.join(", ");
+
+  const hasSketch = Boolean(options?.hasSketch);
+  const enhance = !hasSketch;
+  const negativePrompt = options?.negativePrompt || DEFAULT_NEGATIVE_PROMPT;
+
+  return new PromptResult(fullPrompt, negativePrompt, enhance, composition, qualityTail);
+}
+
+export function mapLiteralToDenoising(literal: number = 0.5): number {
+  const raw = 0.75 - literal * 0.45;
+  const clamped = Math.max(0.25, Math.min(0.8, raw));
+  return Number(clamped.toFixed(4));
+}
+
+export function deriveDimensions(
+  aspect?: "square" | "portrait" | "landscape" | null,
+  bounds?: { width: number; height: number } | null,
+  hasSketch: boolean = true
+): { width: number; height: number } {
+  if (!hasSketch) {
+    return { width: 1024, height: 1024 };
+  }
+
+  let w = 768;
+  let h = 768;
+
+  if (bounds && bounds.width > 0 && bounds.height > 0) {
+    const ratio = bounds.width / bounds.height;
+    if (ratio > 1) {
+      w = 1024;
+      h = Math.round((1024 / ratio) / 64) * 64;
+    } else {
+      h = 1024;
+      w = Math.round((1024 * ratio) / 64) * 64;
+    }
+  } else if (aspect === "portrait") {
+    w = 640;
+    h = 960;
+  } else if (aspect === "landscape") {
+    w = 960;
+    h = 640;
+  } else {
+    w = 768;
+    h = 768;
+  }
+
+  w = Math.max(512, Math.min(1024, Math.round(w / 64) * 64));
+  h = Math.max(512, Math.min(1024, Math.round(h / 64) * 64));
+
+  return { width: w, height: h };
+}
+
+export function computeCacheKey(
+  prompt: string,
+  sketchBase64: string,
+  styleId: string = "",
+  seed?: number,
+  backend: string = "default"
+): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(prompt.trim().toLowerCase());
+  hash.update(styleId.trim().toLowerCase());
+  hash.update(String(seed ?? ""));
+  hash.update(backend);
+  if (sketchBase64 && sketchBase64.trim()) {
+    const sketchHash = crypto.createHash("sha256").update(sketchBase64.trim()).digest("hex");
+    hash.update(sketchHash);
+  } else {
+    hash.update("no-sketch");
+  }
+  return hash.digest("hex");
+}
+
+export type CachedResult = {
+  imageUrl: string;
+  provider: string;
+  model: string;
+  sketchGuided: boolean;
+  seed: number;
+};
+
+// In-memory cache for generation results
+export const resultCache = new Map<string, CachedResult>();
+
+export type JobStatus = {
   id: string;
   status: "pending" | "processing" | "completed" | "failed";
   progress: number;
   imageUrl?: string;
   error?: string;
+  provider?: string;
+  model?: string;
+  sketchGuided?: boolean;
+  seed?: number;
   createdAt: number;
 };
-const jobs = new Map<string, JobStatus>();
+
+export const jobs = new Map<string, JobStatus>();
 
 // Clean up stale jobs older than 15 minutes
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [id, job] of jobs.entries()) {
     if (now - job.createdAt > 15 * 60 * 1000) {
@@ -31,10 +179,11 @@ setInterval(() => {
     }
   }
 }, 60 * 1000);
+cleanupInterval.unref();
 
-// A4.2: Rate limiter (5 requests per minute per IP)
+// Rate limiter (5 requests per minute per IP)
 const ipRateLimit = new Map<string, number[]>();
-function checkRateLimit(ip: string): boolean {
+export function checkRateLimit(ip: string): boolean {
   const now = Date.now();
   const timestamps = (ipRateLimit.get(ip) || []).filter((t) => now - t < 60 * 1000);
   if (timestamps.length >= 5) {
@@ -45,58 +194,133 @@ function checkRateLimit(ip: string): boolean {
   return true;
 }
 
-function getCacheKey(prompt: string, imageBase64: string): string {
-  const hash = crypto.createHash("sha256");
-  hash.update(prompt);
-  // Hash image content / length
-  hash.update(imageBase64.slice(0, 1000));
-  hash.update(String(imageBase64.length));
-  return hash.digest("hex");
+export function resetRateLimitsForTesting(): void {
+  ipRateLimit.clear();
+  resultCache.clear();
+  jobs.clear();
 }
 
-async function tryHuggingFace(prompt: string, model: string): Promise<string | null> {
-  if (!env.hfToken) return null;
-
+async function tryAIHordeImg2Img(
+  prompt: string,
+  rawBase64: string,
+  denoisingStrength: number,
+  width: number,
+  height: number,
+  seed: number,
+  negativePrompt: string,
+  updateProgress?: (p: number) => void
+): Promise<{ imageUrl: string; model: string } | null> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout (A4.2)
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-    const response = await fetch(
-      `https://router.huggingface.co/hf-inference/models/${model}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.hfToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ inputs: prompt }),
-        signal: controller.signal
+    const hordePayload = {
+      prompt: `${prompt} ### ${negativePrompt}`,
+      params: {
+        width,
+        height,
+        steps: 15,
+        cfg_scale: 7,
+        n: 1,
+        seed: String(seed),
+        denoising_strength: denoisingStrength,
+        negative_prompt: negativePrompt
+      },
+      source_image: rawBase64,
+      source_processing: "img2img",
+      nsfw: false,
+      censor_nsfw: false
+      // slow_workers must not be set to false for anonymous keys
+    };
+
+    const submitResponse = await fetch(`${HORDE_BASE}/generate/async`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: ANON_KEY
+      },
+      body: JSON.stringify(hordePayload),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!submitResponse.ok) return null;
+    const { id: hordeJobId } = (await submitResponse.json()) as { id: string };
+
+    // Poll up to 3 times (6 seconds total); if wait_time > 45 or queue is large, bail to next backend
+    for (let i = 0; i < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      updateProgress?.(30 + i * 15);
+
+      const statusResponse = await fetch(`${HORDE_BASE}/generate/check/${hordeJobId}`);
+      if (!statusResponse.ok) continue;
+
+      const check = (await statusResponse.json()) as {
+        done: boolean;
+        faulted: boolean;
+        wait_time?: number;
+        queue_position?: number;
+      };
+
+      if (check.faulted || (check.wait_time && check.wait_time > 45)) {
+        return null;
       }
-    );
 
-    clearTimeout(timeoutId);
+      if (check.done) {
+        const fullStatusRes = await fetch(`${HORDE_BASE}/generate/status/${hordeJobId}`);
+        if (!fullStatusRes.ok) return null;
+        const fullStatus = (await fullStatusRes.json()) as {
+          generations?: Array<{ img: string; model?: string }>;
+        };
+        const gen = fullStatus.generations?.[0];
+        if (!gen) return null;
 
-    if (!response.ok) {
-      return null;
+        const modelName = gen.model || "AI Horde";
+        let finalImageUrl: string;
+        if (gen.img.startsWith("http://") || gen.img.startsWith("https://")) {
+          finalImageUrl = gen.img;
+        } else {
+          finalImageUrl = await saveBase64Image(`data:image/webp;base64,${gen.img}`);
+        }
+        return { imageUrl: finalImageUrl, model: modelName };
+      }
     }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get("content-type") || "image/png";
-    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    // Persist to disk instead of returning raw base64 (A1.3)
-    return await saveBase64Image(base64);
+    return null;
   } catch {
     return null;
   }
 }
 
-async function tryPollinations(prompt: string): Promise<string | null> {
+async function tryPollinationsImg(
+  prompt: string,
+  publicSketchUrl: string | null,
+  width: number,
+  height: number,
+  seed: number,
+  negativePrompt: string,
+  modelName: string = "klein"
+): Promise<{ imageUrl: string; model: string } | null> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const params = new URLSearchParams({
+      width: String(width),
+      height: String(height),
+      seed: String(seed),
+      nologo: "true",
+      negative_prompt: negativePrompt
+    });
+    if (publicSketchUrl) {
+      params.set("image", publicSketchUrl);
+    }
+    if (modelName) {
+      params.set("model", modelName);
+    }
 
     const encodedPrompt = encodeURIComponent(prompt.slice(0, 200));
-    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
+    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?${params.toString()}`;
+
     const response = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -113,255 +337,321 @@ async function tryPollinations(prompt: string): Promise<string | null> {
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length < 500) return null;
 
+    const usedModel = response.headers.get("x-model-used") || modelName || "sana";
     const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    return await saveBase64Image(base64);
+    const savedUrl = await saveBase64Image(base64);
+    return { imageUrl: savedUrl, model: usedModel };
   } catch {
     return null;
   }
 }
 
-async function tryAIHorde(prompt: string, updateProgress?: (p: number) => void): Promise<string | null> {
+async function tryHuggingFaceImg2Img(
+  prompt: string,
+  rawBase64: string,
+  model: string = "black-forest-labs/FLUX.1-Kontext-dev"
+): Promise<{ imageUrl: string; model: string } | null> {
+  if (!env.hfToken) return null;
+
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-    const submitResponse = await fetch(`${HORDE_BASE}/generate/async`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: ANON_KEY
-      },
-      body: JSON.stringify({
-        prompt,
-        params: {
-          width: 512,
-          height: 512,
-          steps: 15,
-          cfg_scale: 7,
-          sampler_name: "k_euler"
+    const response = await fetch(
+      `https://router.huggingface.co/hf-inference/models/${model}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.hfToken}`,
+          "Content-Type": "application/json"
         },
-        nsfw: false,
-        censor_nsfw: false,
-        slow_workers: false
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    if (!submitResponse.ok) return null;
-    const { id: hordeJobId } = (await submitResponse.json()) as { id: string };
-
-    // Poll up to 3 times (6 seconds total), don't keep user waiting if queue is long
-    for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      updateProgress?.(50 + i * 15);
-
-      const statusResponse = await fetch(`${HORDE_BASE}/generate/status/${hordeJobId}`);
-      if (!statusResponse.ok) continue;
-
-      const status = (await statusResponse.json()) as {
-        done: boolean;
-        faulted: boolean;
-        wait_time?: number;
-        queue_position?: number;
-        generations?: Array<{ img: string }>;
-      };
-
-      if (status.faulted || (status.wait_time && status.wait_time > 45)) {
-        return null;
+        body: JSON.stringify({
+          inputs: prompt,
+          parameters: { image: rawBase64 }
+        }),
+        signal: controller.signal
       }
+    );
 
-      if (status.done && status.generations && status.generations.length > 0) {
-        const img = status.generations[0].img;
-        if (img.startsWith("http://") || img.startsWith("https://")) {
-          return img;
-        }
-        return await saveBase64Image(`data:image/webp;base64,${img}`);
-      }
-    }
-    return null;
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type") || "image/png";
+    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
+    const savedUrl = await saveBase64Image(base64);
+    return { imageUrl: savedUrl, model };
   } catch {
     return null;
   }
 }
 
-async function synthesizeArtisticEnhancement(prompt: string, imageBase64: string): Promise<string> {
-  const isCyberpunk = /cyberpunk/i.test(prompt);
-  const isAnime = /anime/i.test(prompt);
-  const is3D = /3d|render|clay/i.test(prompt);
-  const isOil = /oil|painting/i.test(prompt);
-  const isWatercolor = /watercolor/i.test(prompt);
-  const isSketch = /pencil|sketch|graphite/i.test(prompt);
-
-  let accent1 = "#8b5cf6";
-  let accent2 = "#ec4899";
-  let styleTitle = "DIGITAL ART";
-
-  if (isCyberpunk) {
-    accent1 = "#06b6d4";
-    accent2 = "#f43f5e";
-    styleTitle = "CYBERPUNK";
-  } else if (isAnime) {
-    accent1 = "#f472b6";
-    accent2 = "#c084fc";
-    styleTitle = "ANIME STYLE";
-  } else if (is3D) {
-    accent1 = "#38bdf8";
-    accent2 = "#818cf8";
-    styleTitle = "3D RENDER";
-  } else if (isWatercolor) {
-    accent1 = "#06b6d4";
-    accent2 = "#10b981";
-    styleTitle = "WATERCOLOR";
-  } else if (isOil) {
-    accent1 = "#f59e0b";
-    accent2 = "#d97706";
-    styleTitle = "OIL PAINTING";
-  } else if (isSketch) {
-    accent1 = "#64748b";
-    accent2 = "#334155";
-    styleTitle = "PENCIL SKETCH";
+export async function processGeneration(
+  job: JobStatus,
+  options: {
+    imageBase64?: string;
+    prompt: string;
+    styleId?: string;
+    literal?: number;
+    seed?: number;
+    aspect?: "square" | "portrait" | "landscape";
+    bounds?: { width: number; height: number };
+    allowTextOnly?: boolean;
   }
+): Promise<void> {
+  const seed = options.seed ?? Math.floor(Math.random() * 1000000);
+  job.seed = seed;
 
-  const cleanPrompt = prompt.split(",")[0].replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const width = 640;
-  const height = 480;
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-    <defs>
-      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="${accent1}" stop-opacity="0.22" />
-        <stop offset="50%" stop-color="#0f111a" stop-opacity="0.96" />
-        <stop offset="100%" stop-color="${accent2}" stop-opacity="0.28" />
-      </linearGradient>
-      <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-        <feGaussianBlur stdDeviation="12" result="blur" />
-        <feComposite in="SourceGraphic" in2="blur" operator="over" />
-      </filter>
-    </defs>
-    <rect width="${width}" height="${height}" fill="#0b0c14" rx="16"/>
-    <rect width="${width}" height="${height}" fill="url(#bg)" rx="16"/>
-    
-    <circle cx="140" cy="120" r="130" fill="${accent1}" opacity="0.16" filter="url(#glow)" />
-    <circle cx="500" cy="350" r="150" fill="${accent2}" opacity="0.16" filter="url(#glow)" />
-    
-    ${imageBase64 ? `<image href="${imageBase64}" x="40" y="40" width="${width - 80}" height="${height - 110}" preserveAspectRatio="xMidYMid meet" opacity="0.95" filter="url(#glow)" />` : ""}
-    
-    <g transform="translate(32, 28)">
-      <rect width="120" height="26" rx="6" fill="${accent1}" opacity="0.25" />
-      <rect width="120" height="26" rx="6" fill="none" stroke="${accent1}" stroke-width="1" opacity="0.6" />
-      <text x="60" y="17" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="10" font-weight="800" text-anchor="middle" letter-spacing="1">${styleTitle}</text>
-    </g>
-
-    <g transform="translate(32, ${height - 56})">
-      <rect width="${width - 64}" height="38" rx="8" fill="rgba(15, 23, 42, 0.8)" stroke="rgba(255, 255, 255, 0.12)" stroke-width="1"/>
-      <circle cx="20" cy="19" r="4" fill="${accent2}" />
-      <text x="36" y="23" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">${cleanPrompt}</text>
-    </g>
-  </svg>`;
-
-  const base64Svg = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
-  return await saveBase64Image(base64Svg);
-}
-
-async function processGeneration(job: JobStatus, prompt: string, imageBase64: string) {
   try {
     job.status = "processing";
-    job.progress = 20;
+    job.progress = 15;
 
-    let enrichedPrompt = `Masterpiece illustration based on sketch: ${prompt}. Clean, high quality digital artwork.`;
-    if (imageBase64.length > 1000) {
-      enrichedPrompt += " Faithful to outlined silhouette and spatial layout.";
+    const hasSketch = Boolean(options.imageBase64 && options.imageBase64.length > 50);
+    const builtPrompt = buildPrompt(options.prompt, {
+      aspect: options.aspect,
+      styleId: options.styleId,
+      hasSketch
+    });
+
+    const dimensions = deriveDimensions(options.aspect, options.bounds, hasSketch);
+
+    let publicSketchUrl: string | null = null;
+    let rawSketchBase64: string | null = null;
+
+    if (hasSketch && options.imageBase64) {
+      job.progress = 25;
+      publicSketchUrl = await saveBase64Image(options.imageBase64);
+      const match = options.imageBase64.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
+      rawSketchBase64 = match ? match[2].replace(/\s+/g, "") : options.imageBase64;
     }
 
-    let imageUrl: string | null = null;
+    let winner: { imageUrl: string; provider: string; model: string; sketchGuided: boolean } | null = null;
 
-    // 1. Try Hugging Face if token provided
-    if (env.hfToken) {
-      job.progress = 30;
-      imageUrl = await tryHuggingFace(enrichedPrompt, "black-forest-labs/FLUX.1-schnell");
-      if (!imageUrl) {
-        imageUrl = await tryHuggingFace(enrichedPrompt, "stabilityai/sd-turbo");
+    // 1. If sketch present, try AI Horde img2img first
+    if (hasSketch && rawSketchBase64) {
+      job.progress = 35;
+      const denoising = mapLiteralToDenoising(options.literal ?? 0.5);
+      const hordeRes = await tryAIHordeImg2Img(
+        builtPrompt.prompt,
+        rawSketchBase64,
+        denoising,
+        dimensions.width,
+        dimensions.height,
+        seed,
+        builtPrompt.negativePrompt,
+        (p) => {
+          job.progress = Math.max(job.progress, p);
+        }
+      );
+      if (hordeRes) {
+        winner = {
+          imageUrl: hordeRes.imageUrl,
+          provider: "AI Horde",
+          model: hordeRes.model,
+          sketchGuided: true
+        };
       }
     }
 
-    // 2. Try Pollinations.ai
-    if (!imageUrl) {
+    // 2. Try Hugging Face if HF_TOKEN is configured and sketch is present
+    if (!winner && hasSketch && rawSketchBase64 && env.hfToken) {
       job.progress = 50;
-      imageUrl = await tryPollinations(enrichedPrompt);
+      const hfRes = await tryHuggingFaceImg2Img(builtPrompt.prompt, rawSketchBase64);
+      if (hfRes) {
+        winner = {
+          imageUrl: hfRes.imageUrl,
+          provider: "Hugging Face",
+          model: hfRes.model,
+          sketchGuided: true
+        };
+      }
     }
 
-    // 3. Try AI Horde with fast queue check
-    if (!imageUrl) {
-      job.progress = 70;
-      imageUrl = await tryAIHorde(enrichedPrompt, (p) => {
-        job.progress = Math.max(job.progress, p);
-      });
+    // 3. Try Pollinations with image=<blob url> (probe proved klein and default sana accept image=)
+    if (!winner && hasSketch && publicSketchUrl) {
+      job.progress = 60;
+      const pollRes = await tryPollinationsImg(
+        builtPrompt.prompt,
+        publicSketchUrl,
+        dimensions.width,
+        dimensions.height,
+        seed,
+        builtPrompt.negativePrompt,
+        "klein"
+      );
+      if (pollRes) {
+        winner = {
+          imageUrl: pollRes.imageUrl,
+          provider: "Pollinations",
+          model: pollRes.model,
+          sketchGuided: true
+        };
+      } else {
+        // Fallback to default sana model
+        const pollSana = await tryPollinationsImg(
+          builtPrompt.prompt,
+          publicSketchUrl,
+          dimensions.width,
+          dimensions.height,
+          seed,
+          builtPrompt.negativePrompt,
+          ""
+        );
+        if (pollSana) {
+          winner = {
+            imageUrl: pollSana.imageUrl,
+            provider: "Pollinations",
+            model: pollSana.model,
+            sketchGuided: true
+          };
+        }
+      }
     }
 
-    // 4. Guaranteed artistic synthesis fallback
-    if (!imageUrl) {
-      job.progress = 90;
-      imageUrl = await synthesizeArtisticEnhancement(prompt, imageBase64);
+    // 4. Text-only fallback (ONLY if sketch was empty OR caller explicitly allowed text-only fallback)
+    if (!winner && (!hasSketch || options.allowTextOnly)) {
+      job.progress = 75;
+      const textOnlyRes = await tryPollinationsImg(
+        builtPrompt.prompt,
+        null,
+        dimensions.width,
+        dimensions.height,
+        seed,
+        builtPrompt.negativePrompt,
+        ""
+      );
+      if (textOnlyRes) {
+        winner = {
+          imageUrl: textOnlyRes.imageUrl,
+          provider: "Pollinations",
+          model: textOnlyRes.model,
+          sketchGuided: false
+        };
+      }
     }
 
-    const cacheKey = getCacheKey(prompt, imageBase64);
-    resultCache.set(cacheKey, imageUrl);
+    // Honest failure: do NOT synthesize SVG poster!
+    if (!winner) {
+      job.status = "failed";
+      job.progress = 0;
+      job.error = "Image service unavailable, try again.";
+      return;
+    }
+
+    // Save in cache
+    const cacheKey = computeCacheKey(
+      options.prompt,
+      options.imageBase64 || "",
+      options.styleId || "",
+      seed,
+      winner.provider
+    );
+    resultCache.set(cacheKey, {
+      imageUrl: winner.imageUrl,
+      provider: winner.provider,
+      model: winner.model,
+      sketchGuided: winner.sketchGuided,
+      seed
+    });
 
     job.status = "completed";
     job.progress = 100;
-    job.imageUrl = imageUrl;
+    job.imageUrl = winner.imageUrl;
+    job.provider = winner.provider;
+    job.model = winner.model;
+    job.sketchGuided = winner.sketchGuided;
+    job.seed = seed;
   } catch (err) {
-    try {
-      const fallbackUrl = await synthesizeArtisticEnhancement(prompt, imageBase64);
-      job.status = "completed";
-      job.progress = 100;
-      job.imageUrl = fallbackUrl;
-    } catch {
-      job.status = "failed";
-      job.error = err instanceof Error ? err.message : "Image generation failed.";
-    }
+    job.status = "failed";
+    job.progress = 0;
+    job.error = err instanceof Error ? err.message : "Image generation failed.";
   }
 }
 
-aiRouter.post("/enhance", async (req: Request, res: Response) => {
+export async function handleGenerateRequest(req: Request, res: Response): Promise<void> {
   const clientIp = req.ip || req.socket.remoteAddress || "unknown";
   if (!checkRateLimit(clientIp)) {
     res.status(429).json({ error: "Rate limit exceeded. Maximum 5 requests per minute." });
     return;
   }
 
-  const { imageBase64, prompt } = req.body as { imageBase64: string; prompt: string };
+  const {
+    imageBase64,
+    prompt,
+    styleId,
+    literal,
+    seed: incomingSeed,
+    aspect,
+    bounds,
+    allowTextOnly
+  } = req.body as {
+    imageBase64?: string;
+    prompt: string;
+    styleId?: string;
+    literal?: number;
+    seed?: number;
+    aspect?: "square" | "portrait" | "landscape";
+    bounds?: { width: number; height: number };
+    allowTextOnly?: boolean;
+  };
 
-  if (!imageBase64 || !prompt) {
-    res.status(400).json({ error: "imageBase64 and prompt are required." });
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    res.status(400).json({ error: "prompt is required." });
     return;
   }
 
-  // A4.4: Check Cache
-  const cacheKey = getCacheKey(prompt, imageBase64);
+  const seed = typeof incomingSeed === "number" ? incomingSeed : Math.floor(Math.random() * 1000000);
+
+  // Check Cache
+  const cacheKey = computeCacheKey(
+    prompt,
+    imageBase64 || "",
+    styleId || "",
+    seed,
+    "default"
+  );
   if (resultCache.has(cacheKey)) {
-    const cachedUrl = resultCache.get(cacheKey)!;
-    res.json({ imageUrl: cachedUrl, cached: true });
+    const cached = resultCache.get(cacheKey)!;
+    res.json({
+      imageUrl: cached.imageUrl,
+      cached: true,
+      provider: cached.provider,
+      model: cached.model,
+      sketchGuided: cached.sketchGuided,
+      seed: cached.seed
+    });
     return;
   }
 
-  // A4.3: Create Job
+  // Create Job
   const jobId = crypto.randomUUID();
   const job: JobStatus = {
     id: jobId,
     status: "pending",
     progress: 5,
+    seed,
     createdAt: Date.now()
   };
   jobs.set(jobId, job);
 
-  // Trigger processing asynchronously in background
-  void processGeneration(job, prompt, imageBase64);
+  // Process asynchronously
+  void processGeneration(job, {
+    imageBase64,
+    prompt,
+    styleId,
+    literal,
+    seed,
+    aspect,
+    bounds,
+    allowTextOnly
+  });
 
-  // Return jobId for polling/streaming
-  res.status(202).json({ jobId, status: "pending" });
-});
+  res.status(202).json({ jobId, status: "pending", seed });
+}
+
+aiRouter.post("/generate", handleGenerateRequest);
+aiRouter.post("/enhance", handleGenerateRequest);
 
 aiRouter.get("/job/:id", (req: Request, res: Response) => {
   const jobId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -377,6 +667,10 @@ aiRouter.get("/job/:id", (req: Request, res: Response) => {
     status: job.status,
     progress: job.progress,
     imageUrl: job.imageUrl,
-    error: job.error
+    error: job.error,
+    provider: job.provider,
+    model: job.model,
+    sketchGuided: job.sketchGuided,
+    seed: job.seed
   });
 });

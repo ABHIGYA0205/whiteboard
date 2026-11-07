@@ -46,6 +46,8 @@ next-env.d.ts
 # Uploads & Media storage
 server/uploads/*
 !server/uploads/.gitkeep
+server/scripts/smoke-result.*
+server/scripts/horde-result.*
 collab-sync-fix.patch
 
 *.patch

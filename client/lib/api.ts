@@ -240,21 +240,53 @@ export function cleanBoard(elements: WhiteboardElement[]) {
   }).then((response) => response.elements);
 }
 
+export interface GenerateAiImageOptions {
+  imageBase64?: string;
+  prompt: string;
+  styleId?: string;
+  literal?: number;
+  seed?: number;
+  aspect?: "square" | "portrait" | "landscape";
+  bounds?: { width: number; height: number };
+  allowTextOnly?: boolean;
+}
+
+export interface GenerateAiImageResult {
+  imageUrl: string;
+  seed?: number;
+  provider?: string;
+  model?: string;
+  sketchGuided?: boolean;
+}
+
 /**
- * A4.3: Enhance sketch with job-polling support
+ * A4.3: Generate AI image conditioned on sketch with job polling
  */
-export async function enhanceSketch(
-  imageBase64: string,
-  prompt: string,
+export async function generateAiImage(
+  options: GenerateAiImageOptions,
   onProgress?: (progress: number) => void
-): Promise<{ imageUrl: string }> {
-  const initial = await request<{ imageUrl?: string; jobId?: string; cached?: boolean }>("/ai/enhance", {
+): Promise<GenerateAiImageResult> {
+  const initial = await request<{
+    imageUrl?: string;
+    jobId?: string;
+    cached?: boolean;
+    provider?: string;
+    model?: string;
+    sketchGuided?: boolean;
+    seed?: number;
+  }>("/ai/generate", {
     method: "POST",
-    body: JSON.stringify({ imageBase64, prompt })
+    body: JSON.stringify(options)
   });
 
   if (initial.imageUrl) {
-    return { imageUrl: resolveImageUrl(initial.imageUrl) };
+    return {
+      imageUrl: resolveImageUrl(initial.imageUrl),
+      provider: initial.provider,
+      model: initial.model,
+      sketchGuided: initial.sketchGuided,
+      seed: initial.seed
+    };
   }
 
   if (!initial.jobId) {
@@ -270,12 +302,22 @@ export async function enhanceSketch(
       progress: number;
       imageUrl?: string;
       error?: string;
+      provider?: string;
+      model?: string;
+      sketchGuided?: boolean;
+      seed?: number;
     }>(`/ai/job/${jobId}`);
 
     onProgress?.(status.progress || 0);
 
     if (status.status === "completed" && status.imageUrl) {
-      return { imageUrl: resolveImageUrl(status.imageUrl) };
+      return {
+        imageUrl: resolveImageUrl(status.imageUrl),
+        provider: status.provider,
+        model: status.model,
+        sketchGuided: status.sketchGuided,
+        seed: status.seed
+      };
     }
 
     if (status.status === "failed") {
@@ -284,4 +326,15 @@ export async function enhanceSketch(
   }
 
   throw new Error("Image enhancement timed out.");
+}
+
+/**
+ * Backwards-compatible alias for sketch enhancement
+ */
+export async function enhanceSketch(
+  imageBase64: string,
+  prompt: string,
+  onProgress?: (progress: number) => void
+): Promise<{ imageUrl: string }> {
+  return generateAiImage({ imageBase64, prompt }, onProgress);
 }

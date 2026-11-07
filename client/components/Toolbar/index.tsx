@@ -241,119 +241,74 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   };
 
   const handleEnhance = () => {
-    const drawingElements = elements.filter(
-      (el) =>
-        el.type === "pencil" ||
-        el.type === "rectangle" ||
-        el.type === "circle" ||
-        el.type === "line" ||
-        el.type === "arrow"
-    );
+    let targetElements: WhiteboardElement[] = [];
 
-    let seedElement = drawingElements[drawingElements.length - 1];
-    if (selectedElementId) {
-      const selected = drawingElements.find((el) => el.id === selectedElementId);
-      if (selected) {
-        seedElement = selected;
-      }
+    const activeSelectedIds = selectedElementIds.length > 0
+      ? selectedElementIds
+      : (selectedElementId ? [selectedElementId] : []);
+
+    if (activeSelectedIds.length > 0) {
+      targetElements = elements.filter((el) => activeSelectedIds.includes(el.id));
+    } else if (elements.length > 0) {
+      targetElements = elements;
     }
 
     let detectedPrompt = "";
     let sketchBase64: string | undefined = undefined;
     let clusterElements: WhiteboardElement[] = [];
-    let bounds = null;
+    let bounds: { x: number; y: number; width: number; height: number } | null = null;
 
-    if (seedElement) {
-      const getBoundingBox = (el: WhiteboardElement) => {
+    if (targetElements.length > 0) {
+      clusterElements = targetElements;
+      sketchBase64 = exportSelectionToImage(targetElements) || undefined;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const el of targetElements) {
         const b = getNormalizedBounds(el);
-        if (el.type === "pencil") {
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        if (el.type === "pencil" && el.points && el.points.length > 0) {
           for (const pt of el.points) {
             minX = Math.min(minX, pt.x);
             minY = Math.min(minY, pt.y);
             maxX = Math.max(maxX, pt.x);
             maxY = Math.max(maxY, pt.y);
           }
-          return { minX, minY, maxX, maxY };
         } else {
-          return {
-            minX: b.x,
-            minY: b.y,
-            maxX: b.x + b.width,
-            maxY: b.y + b.height
-          };
-        }
-      };
-
-      const getBoxCenter = (box: { minX: number; minY: number; maxX: number; maxY: number }) => ({
-        x: (box.minX + box.maxX) / 2,
-        y: (box.minY + box.maxY) / 2
-      });
-
-      const cluster = [seedElement];
-      const remaining = drawingElements.filter((el) => el.id !== seedElement.id);
-      const queue = [seedElement];
-      const MAX_CLUSTER_DISTANCE = 400;
-
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        const currentBox = getBoundingBox(current);
-        const currentCenter = getBoxCenter(currentBox);
-
-        for (let i = remaining.length - 1; i >= 0; i--) {
-          const candidate = remaining[i];
-          const candidateBox = getBoundingBox(candidate);
-          const candidateCenter = getBoxCenter(candidateBox);
-
-          const distance = Math.hypot(
-            currentCenter.x - candidateCenter.x,
-            currentCenter.y - candidateCenter.y
-          );
-
-          if (distance < MAX_CLUSTER_DISTANCE) {
-            cluster.push(candidate);
-            queue.push(candidate);
-            remaining.splice(i, 1);
-          }
+          minX = Math.min(minX, b.x);
+          minY = Math.min(minY, b.y);
+          maxX = Math.max(maxX, b.x + b.width);
+          maxY = Math.max(maxY, b.y + b.height);
         }
       }
 
-      clusterElements = cluster;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const el of cluster) {
-        const box = getBoundingBox(el);
-        minX = Math.min(minX, box.minX);
-        minY = Math.min(minY, box.minY);
-        maxX = Math.max(maxX, box.maxX);
-        maxY = Math.max(maxY, box.maxY);
+      if (minX !== Infinity && maxX !== -Infinity) {
+        bounds = {
+          x: minX,
+          y: minY,
+          width: Math.max(maxX - minX, 240),
+          height: Math.max(maxY - minY, 240)
+        };
       }
 
-      bounds = {
-        x: minX,
-        y: minY,
-        width: Math.max(maxX - minX, 240),
-        height: Math.max(maxY - minY, 240)
-      };
-
-      sketchBase64 = exportSelectionToImage(cluster) || undefined;
-
+      // Check for nearby text to suggest prompt
       const textElements = elements.filter(
         (el) =>
           (el.type === "text" || el.type === "sticky" || el.type === "rectangle") &&
           el.text?.trim()
       );
 
-      if (textElements.length > 0) {
+      if (textElements.length > 0 && bounds) {
         const clusterCenter = {
-          x: (minX + maxX) / 2,
-          y: (minY + maxY) / 2
+          x: bounds.x + bounds.width / 2,
+          y: bounds.y + bounds.height / 2
         };
 
         let minDistance = Infinity;
         for (const textEl of textElements) {
-          const textBox = getBoundingBox(textEl);
-          const textCenter = getBoxCenter(textBox);
+          const textBox = getNormalizedBounds(textEl);
+          const textCenter = {
+            x: textBox.x + textBox.width / 2,
+            y: textBox.y + textBox.height / 2
+          };
           const distance = Math.hypot(
             clusterCenter.x - textCenter.x,
             clusterCenter.y - textCenter.y
