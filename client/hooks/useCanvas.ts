@@ -44,6 +44,7 @@ type CollaborationApi = {
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
   emitLaser?: (point: Point, color?: string) => void;
+  requestResync?: () => void;
 };
 
 type UseCanvasOptions = {
@@ -58,6 +59,7 @@ type InteractionState =
       mode: "drawing";
       elementId: string;
       previousElements: WhiteboardElement[];
+      announced?: boolean;
     }
   | {
       mode: "dragging";
@@ -551,8 +553,14 @@ export function useCanvas({
     interactionRef.current = {
       mode: "drawing",
       elementId: element.id,
-      previousElements: currentElements
+      previousElements: currentElements,
+      announced: false
     };
+
+    if (!interactionRef.current.announced) {
+      interactionRef.current.announced = true;
+      collaboration.emitDraw(element);
+    }
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {

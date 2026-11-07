@@ -120,6 +120,17 @@ type BoardState = {
 
 const LOCAL_EDIT_GRACE_MS = 600;
 
+const warnedUnknownElementIds = new Set<string>();
+let resyncHandler: (() => void) | null = null;
+
+export function registerResyncHandler(handler: (() => void) | null) {
+  resyncHandler = handler;
+}
+
+export function resetUnknownElementWarnings() {
+  warnedUnknownElementIds.clear();
+}
+
 /**
  * Records which elements the local user just touched, so an incoming snapshot
  * that is a few hundred ms stale cannot revert a shape they are still moving.
@@ -361,7 +372,16 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       if (state.activeElementIds.has(elementId)) return state;
 
       const index = state.elements.findIndex((element) => element.id === elementId);
-      if (index === -1) return state;
+      if (index === -1) {
+        if (!warnedUnknownElementIds.has(elementId)) {
+          warnedUnknownElementIds.add(elementId);
+          if (process.env.NODE_ENV !== "production") {
+            console.warn(`[collab] draw-progress for unknown element ${elementId}; requesting resync`);
+          }
+        }
+        resyncHandler?.();
+        return state;
+      }
 
       const next = [...state.elements];
       const target = next[index];
@@ -651,6 +671,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setZoom: (zoom) => set((state) => ({ viewport: { ...state.viewport, zoom } })),
   upsertRemoteElement: (element) =>
     set((state) => {
+      // Clean up warned unknown element tracking once element is received
+      if (warnedUnknownElementIds.has(element.id)) {
+        warnedUnknownElementIds.delete(element.id);
+      }
       // Never resurrect something this board already deleted.
       if (state.deletedElementIds.has(element.id)) {
         return state;

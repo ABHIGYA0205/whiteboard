@@ -14,6 +14,7 @@ type CollaborationApi = {
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
   emitLaser?: (point: { x: number; y: number }, color?: string) => void;
+  requestResync?: () => void;
 };
 
 type CanvasProps = {

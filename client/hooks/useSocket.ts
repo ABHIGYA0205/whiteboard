@@ -1,6 +1,6 @@
 "use client";
 
-import { useBoardStore } from "@/store/boardStore";
+import { useBoardStore, registerResyncHandler } from "@/store/boardStore";
 import type {
   CursorPosition,
   DrawEventPayload,
@@ -57,10 +57,29 @@ export function useSocket(boardId: string) {
   const trailingTimerRef = useRef<number | null>(null);
   const queuedCursorRef = useRef<Omit<CursorPosition, "userId"> | null>(null);
   const lastCursorSentRef = useRef(0);
+  const lastResyncRef = useRef(0);
+
+  const requestResync = useMemo(() => {
+    return () => {
+      const now = Date.now();
+      if (now - lastResyncRef.current < 2000) {
+        return;
+      }
+      lastResyncRef.current = now;
+      if (socketRef.current?.connected && boardId) {
+        const currentName =
+          typeof window !== "undefined"
+            ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
+            : null;
+        socketRef.current.emit("join-board", { boardId, userName: currentName || undefined });
+      }
+    };
+  }, [boardId]);
 
   useEffect(() => {
     let isMounted = true;
     let activeSocket: Socket | null = null;
+    registerResyncHandler(requestResync);
 
     const setupSocket = async () => {
       const { io } = await import("socket.io-client");
@@ -286,6 +305,7 @@ export function useSocket(boardId: string) {
 
     return () => {
       isMounted = false;
+      registerResyncHandler(null);
       cleanupSocket?.();
       window.clearInterval(cleanupInterval);
       window.removeEventListener("beforeunload", handleBeforeUnload);
@@ -309,7 +329,8 @@ export function useSocket(boardId: string) {
     mergeRemoteElements,
     applyRemoteClear,
     upsertRemoteCursor,
-    upsertRemoteElement
+    upsertRemoteElement,
+    requestResync
   ]);
 
   return useMemo(
@@ -388,8 +409,11 @@ export function useSocket(boardId: string) {
           localStorage.setItem("whiteboard_user_name", name);
         }
         socketRef.current?.emit("update-user-name", { boardId, name });
+      },
+      requestResync() {
+        requestResync();
       }
     }),
-    [boardId]
+    [boardId, requestResync]
   );
 }
