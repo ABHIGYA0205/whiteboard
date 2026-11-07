@@ -46,6 +46,12 @@ function validateEnv() {
     mongoUri,
     hfToken: process.env.HF_TOKEN ?? "",
     clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins,
+    get blobReadWriteToken(): string {
+      return process.env.BLOB_READ_WRITE_TOKEN?.trim() || "";
+    },
+    get blobToken(): string {
+      return process.env.BLOB_READ_WRITE_TOKEN?.trim() || "";
+    },
     get s3(): S3Config {
       return {
         endpoint: process.env.S3_ENDPOINT?.trim() || undefined,

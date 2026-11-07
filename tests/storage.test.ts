@@ -9,8 +9,14 @@ import {
   stripBase64Payload,
   setS3ConfigForTesting,
   setS3ClientForTesting,
-  getUploadsDir,
+  setBlobTokenForTesting,
+  setBlobPutForTesting,
+  isBlobConfigured,
   isS3Configured,
+  getActiveStorageBackend,
+  getStorageFallbacks,
+  resetStorageFallbacksForTesting,
+  getUploadsDir,
   MAX_IMAGE_SIZE_BYTES,
   ImageSizeLimitError,
   ImageValidationError
@@ -297,4 +303,162 @@ test("uploadImageController: maps validation, size, and storage errors to correc
     const filename = path.basename(res.body.url);
     await fs.promises.unlink(path.join(getUploadsDir(), filename));
   }
+});
+
+test("storage: Vercel Blob upload when token is set", async () => {
+  let putArgs: { pathname: string; body: Buffer; options: any } | null = null;
+  const mockPut = async (pathname: string, body: Buffer, options: any) => {
+    putArgs = { pathname, body, options };
+    return {
+      url: `https://test-store.public.blob.vercel-storage.com/${pathname}`
+    };
+  };
+
+  setBlobTokenForTesting("vercel_blob_rw_test_token_123");
+  setBlobPutForTesting(mockPut);
+  setS3ConfigForTesting(null);
+
+  assert.equal(isBlobConfigured(), true);
+  assert.equal(getActiveStorageBackend(), "vercel-blob");
+
+  const returnedUrl = await saveBase64Image(SAMPLE_1PX_PNG);
+
+  assert.ok(putArgs, "put() must be called");
+  assert.match((putArgs as any).pathname, /^boards\/[0-9a-f-]+\.png$/);
+  assert.equal((putArgs as any).options.access, "public");
+  assert.equal((putArgs as any).options.contentType, "image/png");
+  assert.equal((putArgs as any).options.token, "vercel_blob_rw_test_token_123");
+  assert.ok(Buffer.isBuffer((putArgs as any).body));
+  assert.equal(returnedUrl, `https://test-store.public.blob.vercel-storage.com/${(putArgs as any).pathname}`);
+
+  // Reset
+  setBlobTokenForTesting(null);
+  setBlobPutForTesting(null);
+});
+
+test("storage: token unset falls through to S3 branch, and with neither set falls to local disk", async () => {
+  // 1. Blob token unset, S3 configured -> S3 branch
+  setBlobTokenForTesting("");
+  setBlobPutForTesting(null);
+
+  let s3Called = false;
+  const mockS3Client = {
+    send: async () => {
+      s3Called = true;
+      return {};
+    }
+  };
+
+  setS3ConfigForTesting({
+    bucket: "whiteboard-assets",
+    region: "us-east-1",
+    publicBaseUrl: "https://cdn.canvasflow.dev"
+  });
+  setS3ClientForTesting(mockS3Client);
+
+  assert.equal(isBlobConfigured(), false);
+  assert.equal(isS3Configured(), true);
+  assert.equal(getActiveStorageBackend(), "s3");
+
+  const s3Url = await saveBase64Image(SAMPLE_1PX_PNG);
+  assert.equal(s3Called, true);
+  assert.match(s3Url, /^https:\/\/cdn\.canvasflow\.dev\/boards\/[0-9a-f-]+\.png$/);
+
+  // 2. Both unset -> local disk
+  setS3ConfigForTesting(null);
+  setS3ClientForTesting(null);
+
+  assert.equal(isBlobConfigured(), false);
+  assert.equal(isS3Configured(), false);
+  assert.equal(getActiveStorageBackend(), "local");
+
+  const localPath = await saveBase64Image(SAMPLE_1PX_PNG);
+  assert.match(localPath, /^\/uploads\/[0-9a-f-]+\.png$/);
+  const fullPath = path.join(getUploadsDir(), path.basename(localPath));
+  assert.ok(fs.existsSync(fullPath));
+  await fs.promises.unlink(fullPath);
+
+  // Reset
+  setBlobTokenForTesting(null);
+});
+
+test("storage: Vercel Blob put() rejection falls back to local disk, increments fallback counter, never logs image payload", async () => {
+  resetStorageFallbacksForTesting();
+  assert.equal(getStorageFallbacks(), 0);
+
+  const loggedWarnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: any[]) => {
+    loggedWarnings.push(args.map(String).join(" "));
+  };
+
+  try {
+    setBlobTokenForTesting("super_secret_blob_token_999");
+    setBlobPutForTesting(async () => {
+      throw new Error("Vercel Blob 403 Forbidden with super_secret_blob_token_999");
+    });
+    setS3ConfigForTesting(null);
+    setS3ClientForTesting(null);
+
+    const fallbackUrl = await saveBase64Image(SAMPLE_1PX_PNG);
+    assert.match(fallbackUrl, /^\/uploads\/[0-9a-f-]+\.png$/);
+
+    // Fallback counter must be incremented
+    assert.equal(getStorageFallbacks(), 1);
+
+    // Local file exists
+    const fullPath = path.join(getUploadsDir(), path.basename(fallbackUrl));
+    assert.ok(fs.existsSync(fullPath));
+    await fs.promises.unlink(fullPath);
+
+    // Warning logged naming the error
+    const blobWarn = loggedWarnings.find((w) => w.includes("Vercel Blob upload failed"));
+    assert.ok(blobWarn, "Must log warning naming Vercel Blob error");
+    assert.match(blobWarn, /403 Forbidden/);
+
+    // Token must be redacted and never logged
+    assert.ok(!blobWarn.includes("super_secret_blob_token_999"), "Token must never appear in logs");
+    assert.match(blobWarn, /\[REDACTED\]/);
+
+    // Image payload must never be logged
+    assert.ok(!blobWarn.includes(SAMPLE_1PX_PNG.slice(30)), "Image payload must not be logged");
+  } finally {
+    console.warn = origWarn;
+    setBlobTokenForTesting(null);
+    setBlobPutForTesting(null);
+    resetStorageFallbacksForTesting();
+  }
+});
+
+test("storage: Vercel Blob put() rejection falls through to S3 when S3 is configured", async () => {
+  resetStorageFallbacksForTesting();
+
+  setBlobTokenForTesting("test_token");
+  setBlobPutForTesting(async () => {
+    throw new Error("Vercel Blob server error 500");
+  });
+
+  let s3Sent = false;
+  setS3ConfigForTesting({
+    bucket: "s3-backup-bucket",
+    publicBaseUrl: "https://s3-backup.example.com"
+  });
+  setS3ClientForTesting({
+    send: async () => {
+      s3Sent = true;
+      return {};
+    }
+  });
+
+  const url = await saveBase64Image(SAMPLE_1PX_PNG);
+  assert.equal(s3Sent, true);
+  assert.match(url, /^https:\/\/s3-backup\.example\.com\/boards\/[0-9a-f-]+\.png$/);
+  assert.equal(getStorageFallbacks(), 1);
+
+  // Reset
+  setBlobTokenForTesting(null);
+  setBlobPutForTesting(null);
+  setS3ConfigForTesting(null);
+  setS3ClientForTesting(null);
+  resetStorageFallbacksForTesting();
 });

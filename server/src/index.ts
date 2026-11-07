@@ -7,7 +7,13 @@ import { boardRouter } from "./routes/board";
 import { aiRouter } from "./routes/ai";
 import { registerBoardSocket } from "./sockets/board.socket";
 import { env } from "./utils/env";
-import { getUploadsDir, isS3Configured, warnIfLocalStorage } from "./utils/storage";
+import {
+  getUploadsDir,
+  getActiveStorageBackend,
+  getStorageFallbacks,
+  getActiveS3Config,
+  warnIfLocalStorage
+} from "./utils/storage";
 
 async function start() {
   // Connect to MongoDB asynchronously with auto-retry (keeps server alive if offline/network issue)
@@ -74,7 +80,8 @@ async function start() {
   app.get("/health", (_request, response) => {
     response.json({
       ok: true,
-      storage: isS3Configured() ? "s3" : "local"
+      storage: getActiveStorageBackend(),
+      storageFallbacks: getStorageFallbacks()
     });
   });
 
@@ -151,8 +158,11 @@ async function start() {
     console.log(`Server listening on http://localhost:${env.port}`);
     console.log(`Allowed client origins: ${env.clientOrigins.join(", ")}`);
     warnIfLocalStorage();
-    if (isS3Configured()) {
-      console.log(`Storage backend: s3 (bucket: ${env.s3.bucket})`);
+    const backend = getActiveStorageBackend();
+    if (backend === "vercel-blob") {
+      console.log("Storage backend: vercel-blob");
+    } else if (backend === "s3") {
+      console.log(`Storage backend: s3 (bucket: ${getActiveS3Config().bucket})`);
     } else {
       console.log("Storage backend: local");
     }

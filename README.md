@@ -104,6 +104,14 @@ CLIENT_ORIGIN=http://localhost:3000,http://localhost:3001
 HF_TOKEN=your_token_optional
 ```
 
+#### Vercel Blob Storage (Preferred; Optional)
+
+> **Note**: Leaving `BLOB_READ_WRITE_TOKEN` unset falls back to S3/local.
+
+| Variable | Description |
+|---|---|
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob read/write token for object storage |
+
 #### S3-Compatible Object Storage (Optional)
 
 > **Note**: Leaving `S3_*` variables unset falls back to writing images to local disk in `uploads/` (these will be lost on deploy / ephemeral filesystems like Render).

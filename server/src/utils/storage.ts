@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { put } from "@vercel/blob";
 import { env, type S3Config } from "./env";
 
 const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
@@ -143,6 +144,51 @@ export function parseAndValidateDataUrl(dataUrl: string): ParsedImage {
   return { contentType, extension, buffer };
 }
 
+export type StorageBackend = "vercel-blob" | "s3" | "local";
+
+let blobTokenOverride: string | null = null;
+let blobPutOverride:
+  | ((pathname: string, body: Buffer, options: any) => Promise<{ url: string }>)
+  | null = null;
+
+let storageFallbacks = 0;
+
+export function setBlobTokenForTesting(token: string | null): void {
+  blobTokenOverride = token;
+}
+
+export function setBlobPutForTesting(
+  fn: ((pathname: string, body: Buffer, options: any) => Promise<{ url: string }>) | null
+): void {
+  blobPutOverride = fn;
+}
+
+export function getActiveBlobToken(): string {
+  return blobTokenOverride !== null ? blobTokenOverride : env.blobToken;
+}
+
+export function isBlobConfigured(): boolean {
+  return Boolean(getActiveBlobToken());
+}
+
+export function getStorageFallbacks(): number {
+  return storageFallbacks;
+}
+
+export function resetStorageFallbacksForTesting(): void {
+  storageFallbacks = 0;
+}
+
+export function getActiveStorageBackend(): StorageBackend {
+  if (isBlobConfigured()) {
+    return "vercel-blob";
+  }
+  if (isS3Configured()) {
+    return "s3";
+  }
+  return "local";
+}
+
 let s3ConfigOverride: S3Config | null = null;
 let s3ClientOverride: { send: (command: any) => Promise<any> } | null = null;
 
@@ -191,17 +237,17 @@ function getS3Client(): { send: (command: any) => Promise<any> } {
 let hasWarnedLocal = false;
 
 export function warnIfLocalStorage(): void {
-  if (!isS3Configured() && !hasWarnedLocal) {
+  if (!isBlobConfigured() && !isS3Configured() && !hasWarnedLocal) {
     hasWarnedLocal = true;
     console.warn("Images are being written to local disk; they will be lost on deploy.");
   }
 }
 
 /**
- * Persists a base64 image data URL to S3-compatible object storage (if configured)
- * or falls back to local disk in uploads/ and returns the public URL.
- * If S3 PutObject fails, logs a loud warning and falls back to writing to local disk
- * so user images are never lost.
+ * Persists a base64 image data URL to Vercel Blob (preferred),
+ * S3-compatible object storage (secondary), or local disk in uploads/ (fallback).
+ * If a remote backend throws, logs a warning naming the error and falls through
+ * to the next available backend, ending at local disk so user images are never lost.
  */
 export async function saveBase64Image(dataUrl: string): Promise<string> {
   if (!dataUrl.startsWith("data:")) {
@@ -229,10 +275,39 @@ export async function saveBase64Image(dataUrl: string): Promise<string> {
 
   const { contentType, extension, buffer } = parsed;
   const filename = `${randomUUID()}.${extension}`;
+  const key = `boards/${filename}`;
 
+  // 1. Preferred backend: Vercel Blob (when token is set)
+  if (isBlobConfigured()) {
+    const token = getActiveBlobToken();
+    try {
+      const putFn = blobPutOverride || put;
+      const blobResult = await putFn(key, buffer, {
+        access: "public",
+        contentType,
+        token
+      });
+      if (blobResult?.url) {
+        return blobResult.url;
+      }
+    } catch (blobError: any) {
+      storageFallbacks++;
+      let errMsg = blobError instanceof Error ? blobError.message : String(blobError);
+      if (token) {
+        errMsg = errMsg.split(token).join("[REDACTED]");
+      }
+      console.warn(
+        `⚠️ Vercel Blob upload failed (${errMsg}). Falling back to ${
+          isS3Configured() ? "S3" : "local disk"
+        } storage.`
+      );
+      // Fall through to next available backend
+    }
+  }
+
+  // 2. Secondary backend: S3-compatible object storage (when bucket is set)
   if (isS3Configured()) {
     const config = getActiveS3Config();
-    const key = `boards/${filename}`;
     const client = getS3Client();
 
     try {
@@ -254,6 +329,7 @@ export async function saveBase64Image(dataUrl: string): Promise<string> {
       }
       return `https://${config.bucket}.s3.${config.region || "us-east-1"}.amazonaws.com/${key}`;
     } catch (s3Error: any) {
+      storageFallbacks++;
       const errMsg = s3Error instanceof Error ? s3Error.message : String(s3Error);
       console.warn(
         `⚠️ S3 upload failed (${errMsg}). Falling back to local disk storage; images may be lost on deploy.`
@@ -262,7 +338,7 @@ export async function saveBase64Image(dataUrl: string): Promise<string> {
     }
   }
 
-  // Fallback to local disk storage
+  // 3. Fallback to local disk storage
   warnIfLocalStorage();
   try {
     const filePath = path.join(UPLOADS_DIR, filename);
