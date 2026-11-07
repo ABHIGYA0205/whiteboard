@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import type { Request, Response } from "express";
 import { autoCleanElements } from "../services/ai.service";
 import {
@@ -7,6 +8,7 @@ import {
   deleteBoard,
   applyBoardOps,
   claimBoard,
+  hasValidTokenOwner,
   VersionConflictError
 } from "../services/board.service";
 import {
@@ -62,7 +64,7 @@ async function authorizeBoard(
     return { ok: false };
   }
 
-  const isClaimed = Boolean(board.ownerId && board.ownerId.trim());
+  const isClaimed = hasValidTokenOwner(board.ownerId);
   const token = extractToken(request);
 
   if (!isClaimed) {
@@ -104,8 +106,16 @@ async function authorizeBoard(
 
 export async function createBoardController(request: Request, response: Response) {
   try {
-    const isLegacy = request.query.legacy === "true" || Boolean(request.body?.legacy);
-    const board = await createBoard(undefined, isLegacy ? "" : undefined);
+    let legacyOwnerId: string | undefined;
+    if (process.env.NODE_ENV !== "production") {
+      if (request.query.legacy === "true" || Boolean(request.body?.legacy)) {
+        legacyOwnerId =
+          typeof request.body?.ownerId === "string"
+            ? request.body.ownerId
+            : randomUUID();
+      }
+    }
+    const board = await createBoard(undefined, legacyOwnerId);
     response.status(201).json(board);
   } catch (error) {
     response.status(500).json({

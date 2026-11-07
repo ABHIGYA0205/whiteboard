@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import { getBoard, updateBoard, deleteBoard } from "../services/board.service";
+import { getBoard, updateBoard, deleteBoard, hasValidTokenOwner } from "../services/board.service";
 import { verifyBoardToken } from "../utils/token";
 import type { PresenceUser, WhiteboardElement } from "@shared/types";
 
@@ -144,7 +144,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
       if (!boardId || typeof boardId !== "string") return;
 
       const board = await getBoard(boardId);
-      const isClaimed = Boolean(board?.ownerId && board.ownerId.trim());
+      const isClaimed = hasValidTokenOwner(board?.ownerId);
       const candidateToken = token || (socket.handshake.auth?.token as string | undefined);
 
       if (!isClaimed) {

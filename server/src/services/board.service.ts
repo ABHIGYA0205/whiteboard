@@ -15,19 +15,24 @@ export class VersionConflictError extends Error {
 // In-memory store fallback when MongoDB is offline or reconnecting
 const inMemoryBoards = new Map<string, BoardDocument>();
 
+export const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+export function hasValidTokenOwner(ownerId: any): boolean {
+  return typeof ownerId === "string" && SHA256_HEX.test(ownerId.trim());
+}
+
 function isMongoConnected(): boolean {
   return mongoose.connection.readyState === 1;
 }
 
 function toBoardDocument(doc: any): BoardDocument {
-  const hasOwner = Boolean(doc.ownerId && typeof doc.ownerId === "string" && doc.ownerId.trim());
+  const hasTokenOwner = hasValidTokenOwner(doc.ownerId);
   return {
     id: doc.id,
     version: typeof doc.version === "number" ? doc.version : 0,
     title: doc.title || "Untitled Board",
-    ownerId: hasOwner ? doc.ownerId : undefined,
-    claimable: !hasOwner,
-    shareToken: doc.shareToken,
+    ownerId: hasTokenOwner ? doc.ownerId.trim() : undefined,
+    claimable: !hasTokenOwner,
     backgroundColor: doc.backgroundColor || "",
     deletedElementIds: doc.deletedElementIds || [],
     elements: (doc.elements || []).map((el: any) => ({
@@ -82,7 +87,6 @@ export async function createBoard(
         id,
         version: 0,
         ownerId: effectiveOwnerId,
-        shareToken: randomUUID(),
         elements: []
       });
 
@@ -99,19 +103,18 @@ export async function createBoard(
     return { ...inMemoryBoards.get(id)!, ownerToken };
   }
 
-  const hasOwner = Boolean(effectiveOwnerId && effectiveOwnerId.trim());
+  const hasTokenOwner = hasValidTokenOwner(effectiveOwnerId);
   const memoryDoc: BoardDocument = {
     id,
     version: 0,
-    ownerId: hasOwner ? effectiveOwnerId : undefined,
-    claimable: !hasOwner,
-    shareToken: randomUUID(),
+    ownerId: effectiveOwnerId,
+    claimable: !hasTokenOwner,
     elements: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
   inMemoryBoards.set(id, memoryDoc);
-  return { ...memoryDoc, ownerToken };
+  return { ...toBoardDocument(memoryDoc), ownerToken };
 }
 
 export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument } | null> {
@@ -122,7 +125,7 @@ export async function claimBoard(id: string): Promise<{ ownerToken: string; boar
     try {
       const existing = await BoardModel.findOne({ id });
       if (existing) {
-        if (existing.ownerId && typeof existing.ownerId === "string" && existing.ownerId.trim()) {
+        if (hasValidTokenOwner(existing.ownerId)) {
           throw new Error("ALREADY_CLAIMED");
         }
         existing.ownerId = ownerId;
@@ -141,7 +144,7 @@ export async function claimBoard(id: string): Promise<{ ownerToken: string; boar
   if (!memoryDoc) {
     return null;
   }
-  if (memoryDoc.ownerId && memoryDoc.ownerId.trim()) {
+  if (hasValidTokenOwner(memoryDoc.ownerId)) {
     throw new Error("ALREADY_CLAIMED");
   }
 
@@ -152,7 +155,7 @@ export async function claimBoard(id: string): Promise<{ ownerToken: string; boar
     updatedAt: new Date().toISOString()
   };
   inMemoryBoards.set(id, updatedDoc);
-  return { ownerToken, board: updatedDoc };
+  return { ownerToken, board: toBoardDocument(updatedDoc) };
 }
 
 export async function getBoard(id: string): Promise<BoardDocument | null> {
@@ -169,7 +172,8 @@ export async function getBoard(id: string): Promise<BoardDocument | null> {
     }
   }
 
-  return inMemoryBoards.get(id) || null;
+  const mem = inMemoryBoards.get(id);
+  return mem ? toBoardDocument(mem) : null;
 }
 
 /**
@@ -252,8 +256,6 @@ export async function updateBoard(
           const created = await BoardModel.create({
             id,
             version: 1,
-            ownerId: randomUUID(),
-            shareToken: randomUUID(),
             elements: sanitized
           });
           const doc = toBoardDocument(created.toObject());
@@ -298,8 +300,6 @@ export async function updateBoard(
   const currentDoc: BoardDocument = existingDoc || {
     id,
     version: 0,
-    ownerId: randomUUID(),
-    shareToken: randomUUID(),
     elements: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()

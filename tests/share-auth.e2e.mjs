@@ -1,13 +1,61 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import net from "node:net";
 import { io } from "socket.io-client";
 
 const API = process.env.API_URL || "http://127.0.0.1:4001";
 let serverProcess = null;
+let mongoProcess = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function ensureMongo() {
+  try {
+    const s = new net.Socket();
+    await new Promise((resolve, reject) => {
+      s.connect(27017, "127.0.0.1", () => {
+        s.destroy();
+        resolve(true);
+      });
+      s.on("error", reject);
+    });
+    return;
+  } catch {}
+
+  try {
+    fs.mkdirSync("/tmp/test-mongo", { recursive: true });
+    const mongodPath = fs.existsSync("/opt/homebrew/bin/mongod")
+      ? "/opt/homebrew/bin/mongod"
+      : "mongod";
+    mongoProcess = spawn(mongodPath, ["--dbpath", "/tmp/test-mongo", "--port", "27017"], {
+      stdio: "pipe"
+    });
+    for (let i = 0; i < 30; i++) {
+      await sleep(150);
+      try {
+        const s = new net.Socket();
+        const connected = await new Promise((resolve) => {
+          s.connect(27017, "127.0.0.1", () => {
+            s.destroy();
+            resolve(true);
+          });
+          s.on("error", () => resolve(false));
+        });
+        if (connected) {
+          console.log("Local mongod started on port 27017.");
+          return;
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.warn("Could not start local mongod:", err.message);
+  }
+}
+
 async function ensureServer() {
+  await ensureMongo();
+
   try {
     const res = await fetch(`${API}/health`);
     if (res.ok) return;
@@ -20,7 +68,8 @@ async function ensureServer() {
     env: {
       ...process.env,
       PORT: "4001",
-      BOARD_SECRET: "test-board-secret-32-chars-long!"
+      BOARD_SECRET: "test-board-secret-32-chars-long!",
+      NODE_ENV: "test"
     }
   });
 
@@ -34,15 +83,28 @@ async function ensureServer() {
   for (let i = 0; i < 50; i++) {
     await sleep(200);
     try {
-      const res = await fetch(`${API}/health`);
+      const res = await fetch(`${API}/health/ready`);
       if (res.ok) {
-        console.log("Server ready.");
+        console.log("Server and MongoDB ready.");
         return;
       }
     } catch {}
   }
 
-  throw new Error("Server failed to respond to /health within 10s");
+  throw new Error("Server failed to respond to /health/ready within 10s");
+}
+
+function runScript(args = []) {
+  return new Promise((resolve) => {
+    const p = spawn("node", ["server/scripts/migrate-owner-ids.mjs", ...args], {
+      stdio: "pipe"
+    });
+    let stdout = "";
+    let stderr = "";
+    p.stdout.on("data", (d) => (stdout += d.toString()));
+    p.stderr.on("data", (d) => (stderr += d.toString()));
+    p.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
 }
 
 const results = [];
@@ -305,57 +367,7 @@ async function run() {
     });
   }
 
-  // k) Legacy board created without ownerId allows unauthenticated GET with claimable: true,
-  //    can be claimed via POST /board/:id/claim which returns ownerToken and sets ownerId,
-  //    and subsequent GET without a token returns 401.
-  {
-    const legacyCreate = await fetch(`${API}/board?legacy=true`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" }
-    });
-    const legacyBoard = await legacyCreate.json();
-    const legacyIsClaimable = legacyBoard.claimable === true;
-    const noOwnerToken = !legacyBoard.ownerToken;
-
-    // Unauthenticated GET
-    const unauthGet = await fetch(`${API}/board/${legacyBoard.id}`);
-    const unauthData = await unauthGet.json();
-    const unauthPass = unauthGet.status === 200 && unauthData.claimable === true;
-
-    // Claim board
-    const claimRes = await fetch(`${API}/board/${legacyBoard.id}/claim`, { method: "POST" });
-    const claimData = await claimRes.json();
-    const claimPass =
-      claimRes.status === 200 &&
-      Boolean(claimData.ownerToken) &&
-      claimData.board?.ownerId ===
-        crypto.createHash("sha256").update(claimData.ownerToken).digest("hex");
-
-    // Second claim must fail with 409
-    const secondClaim = await fetch(`${API}/board/${legacyBoard.id}/claim`, { method: "POST" });
-    const secondClaimData = await secondClaim.json();
-    const secondClaimPass = secondClaim.status === 409 && secondClaimData.code === "ALREADY_CLAIMED";
-
-    // Subsequent untokened GET returns 401
-    const claimedUntokenedGet = await fetch(`${API}/board/${legacyBoard.id}`);
-    const claimedUntokenedData = await claimedUntokenedGet.json();
-    const claimedUntokenedPass =
-      claimedUntokenedGet.status === 401 && claimedUntokenedData.code === "TOKEN_REQUIRED";
-
-    check(
-      "k) Legacy board allows unauthenticated GET, can be claimed once, and enforces 401 thereafter",
-      legacyIsClaimable && noOwnerToken && unauthPass && claimPass && secondClaimPass && claimedUntokenedPass,
-      {
-        legacyIsClaimable,
-        unauthStatus: unauthGet.status,
-        claimStatus: claimRes.status,
-        secondClaimStatus: secondClaim.status,
-        claimedUntokenedStatus: claimedUntokenedGet.status
-      }
-    );
-  }
-
-  // l) Socket server enforcement: join-denied on claimed board without token or invalid token
+  // Socket tests
   {
     const socketDeniedTest = await new Promise((resolve) => {
       const s = io(API, {
@@ -378,11 +390,8 @@ async function run() {
       }, 3000);
     });
 
-    check("l) Socket join on claimed board without token receives join-denied (TOKEN_REQUIRED)", socketDeniedTest);
-  }
+    check("Socket join on claimed board without token receives join-denied (TOKEN_REQUIRED)", socketDeniedTest);
 
-  // m) Socket server enforcement: join with viewer token succeeds
-  {
     const socketViewerTest = await new Promise((resolve) => {
       const s = io(API, {
         transports: ["websocket"],
@@ -409,13 +418,148 @@ async function run() {
       }, 3000);
     });
 
-    check("m) Socket join with valid viewer token receives board:state", socketViewerTest);
+    check("Socket join with valid viewer token receives board:state", socketViewerTest);
+  }
+
+  console.log("\n--- Testing Legacy UUID OwnerId & Migration ---\n");
+
+  // 1. Seed a board with ownerId = a uuid (simulating pre-migration data)
+  const legacyUuid = crypto.randomUUID();
+  let legacyBoard;
+  {
+    const res = await fetch(`${API}/board`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ legacy: true, ownerId: legacyUuid })
+    });
+    legacyBoard = await res.json();
+    const pass = res.status === 201 && legacyBoard.claimable === true && !legacyBoard.ownerToken;
+    check("1) Seed board with ownerId = legacy UUID (returns claimable: true, no ownerToken)", pass, {
+      status: res.status,
+      claimable: legacyBoard.claimable,
+      hasToken: Boolean(legacyBoard.ownerToken)
+    });
+  }
+
+  // 2. GET without a token -> 200 with claimable: true
+  {
+    const res = await fetch(`${API}/board/${legacyBoard.id}`);
+    const data = await res.json();
+    const pass =
+      res.status === 200 &&
+      data.claimable === true &&
+      (!data.ownerId || !/^[0-9a-f]{64}$/.test(data.ownerId));
+    check("2) GET without token on legacy UUID board returns 200 with claimable: true", pass, {
+      status: res.status,
+      claimable: data.claimable,
+      ownerId: data.ownerId
+    });
+  }
+
+  // 3. POST /claim -> 200 with ownerToken, and ownerId becomes a 64-char sha256 hex
+  let claimedToken;
+  {
+    const res = await fetch(`${API}/board/${legacyBoard.id}/claim`, { method: "POST" });
+    const data = await res.json();
+    claimedToken = data.ownerToken;
+    const hasToken = Boolean(claimedToken);
+    const ownerId = data.board?.ownerId;
+    const isSha256Hex = typeof ownerId === "string" && /^[0-9a-f]{64}$/.test(ownerId);
+    const expectedHash = hasToken
+      ? crypto.createHash("sha256").update(claimedToken).digest("hex")
+      : null;
+    const matches = ownerId === expectedHash;
+
+    check(
+      "3) POST /claim on legacy board returns ownerToken and sets ownerId to 64-char sha256 hex",
+      res.status === 200 && hasToken && isSha256Hex && matches,
+      { status: res.status, isSha256Hex, matches }
+    );
+  }
+
+  // 4. After claiming: GET without token -> 401; GET with new token -> 200
+  {
+    const unauthRes = await fetch(`${API}/board/${legacyBoard.id}`);
+    const unauthData = await unauthRes.json();
+    const unauthPass = unauthRes.status === 401 && unauthData.code === "TOKEN_REQUIRED";
+
+    const authRes = await fetch(`${API}/board/${legacyBoard.id}`, {
+      headers: { Authorization: `Bearer ${claimedToken}` }
+    });
+    const authData = await authRes.json();
+    const authPass = authRes.status === 200 && authData.id === legacyBoard.id;
+
+    check(
+      "4) After claiming: GET without token returns 401, GET with token returns 200",
+      unauthPass && authPass,
+      { unauthStatus: unauthRes.status, unauthCode: unauthData.code, authStatus: authRes.status }
+    );
+  }
+
+  // 5. A board with a real hash ownerId still returns claimable: false and 409 on claim
+  {
+    const claimAgainRes = await fetch(`${API}/board/${legacyBoard.id}/claim`, { method: "POST" });
+    const claimAgainData = await claimAgainRes.json();
+    const pass = claimAgainRes.status === 409 && claimAgainData.code === "ALREADY_CLAIMED";
+    check("5) Board with real hash ownerId returns 409 ALREADY_CLAIMED on claim", pass, {
+      status: claimAgainRes.status,
+      code: claimAgainData.code
+    });
+  }
+
+  // 6. The migration script reports the legacy board in dry-run and nulls it with --apply
+  {
+    const legacyUuid2 = crypto.randomUUID();
+    const seedRes = await fetch(`${API}/board`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ legacy: true, ownerId: legacyUuid2 })
+    });
+    const boardToMigrate = await seedRes.json();
+
+    // Dry-run
+    const dryRun = await runScript([]);
+    const dryRunPass =
+      dryRun.code === 0 &&
+      dryRun.stdout.includes(boardToMigrate.id) &&
+      dryRun.stdout.includes("Updated: 0");
+
+    // Apply
+    const applyRun = await runScript(["--apply"]);
+    const applyPass =
+      applyRun.code === 0 &&
+      applyRun.stdout.includes(boardToMigrate.id) &&
+      applyRun.stdout.includes("Updated:");
+
+    // Subsequent GET without token -> 200 with claimable: true
+    const getRes = await fetch(`${API}/board/${boardToMigrate.id}`);
+    const getData = await getRes.json();
+    const getPass = getRes.status === 200 && getData.claimable === true;
+
+    // Idempotency: second apply should find 0 legacy boards
+    const secondApply = await runScript(["--apply"]);
+    const secondApplyPass =
+      secondApply.code === 0 && secondApply.stdout.includes("Legacy boards found: 0");
+
+    check(
+      "6) Migration script reports in dry-run, nulls ownerId with --apply, and is idempotent",
+      dryRunPass && applyPass && getPass && secondApplyPass,
+      {
+        dryRunCode: dryRun.code,
+        applyCode: applyRun.code,
+        getClaimable: getData.claimable,
+        idempotent: secondApplyPass
+      }
+    );
   }
 
   console.log(`\nResults: ${results.filter(Boolean).length} / ${results.length} checks passed.\n`);
 
   if (serverProcess) {
     serverProcess.kill();
+  }
+  if (mongoProcess) {
+    mongoProcess.kill();
   }
 
   if (results.some((pass) => !pass)) {
@@ -428,5 +572,6 @@ async function run() {
 run().catch((err) => {
   console.error("Test execution failed:", err);
   if (serverProcess) serverProcess.kill();
+  if (mongoProcess) mongoProcess.kill();
   process.exit(1);
 });
