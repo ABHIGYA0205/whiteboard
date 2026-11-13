@@ -1,8 +1,9 @@
 "use client";
 
 import { TOOL_OPTIONS } from "@/components/Canvas/tools";
-import { exportSelectionToImage, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
+import { exportSelectionToImage, exportSketchForAi, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
 import { enhanceSketch, uploadImage, resolveImageUrl } from "@/lib/api";
+import { pickSketchElements } from "@/lib/sketchSelection";
 import { useBoardStore } from "@/store/boardStore";
 import { useState, useEffect, useRef } from "react";
 import type { WhiteboardElement } from "@shared/types";
@@ -127,7 +128,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const [isAiImageModalOpen, setIsAiImageModalOpen] = useState(false);
   const [modalPrompt, setModalPrompt] = useState("");
   const [modalSketchBase64, setModalSketchBase64] = useState<string | undefined>(undefined);
-  const [modalCluster, setModalCluster] = useState<WhiteboardElement[]>([]);
+  const [modalIsClusterUsed, setModalIsClusterUsed] = useState(false);
   const [modalBounds, setModalBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
   const [isMoreOpen, setIsMoreOpen] = useState(false);
@@ -241,26 +242,20 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   };
 
   const handleEnhance = () => {
-    let targetElements: WhiteboardElement[] = [];
-
     const activeSelectedIds = selectedElementIds.length > 0
       ? selectedElementIds
       : (selectedElementId ? [selectedElementId] : []);
 
-    if (activeSelectedIds.length > 0) {
-      targetElements = elements.filter((el) => activeSelectedIds.includes(el.id));
-    } else if (elements.length > 0) {
-      targetElements = elements;
-    }
+    const targetElements = pickSketchElements(elements, activeSelectedIds);
+    const isClusterUsed = activeSelectedIds.length === 0 && targetElements.length > 0;
 
     let detectedPrompt = "";
     let sketchBase64: string | undefined = undefined;
-    let clusterElements: WhiteboardElement[] = [];
     let bounds: { x: number; y: number; width: number; height: number } | null = null;
 
     if (targetElements.length > 0) {
-      clusterElements = targetElements;
-      sketchBase64 = exportSelectionToImage(targetElements) || undefined;
+      const sketchResult = exportSketchForAi(targetElements);
+      sketchBase64 = sketchResult?.dataUrl || undefined;
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const el of targetElements) {
@@ -284,8 +279,8 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
         bounds = {
           x: minX,
           y: minY,
-          width: Math.max(maxX - minX, 240),
-          height: Math.max(maxY - minY, 240)
+          width: maxX - minX,
+          height: maxY - minY
         };
       }
 
@@ -324,16 +319,28 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
 
     setModalPrompt(detectedPrompt);
     setModalSketchBase64(sketchBase64);
-    setModalCluster(clusterElements);
+    setModalIsClusterUsed(isClusterUsed);
     setModalBounds(bounds);
     setIsAiImageModalOpen(true);
   };
 
-  const handleImageGenerated = (imageUrl: string, width: number, height: number) => {
-    const originX = modalBounds ? modalBounds.x : -viewport.x / viewport.zoom + 220;
-    const originY = modalBounds ? modalBounds.y : -viewport.y / viewport.zoom + 160;
-    const finalWidth = modalBounds ? modalBounds.width : width;
-    const finalHeight = modalBounds ? modalBounds.height : height;
+  const handleImageGenerated = (imageUrl: string, naturalWidth: number, naturalHeight: number) => {
+    // 2.4: Size: Height = clamp(sketch bounding-box height, 240, 600), or 400 without sketch.
+    // Width = height * naturalWidth / naturalHeight. Never stretch.
+    const targetHeight = modalBounds
+      ? Math.min(600, Math.max(240, modalBounds.height))
+      : 400;
+    const aspect = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : 1;
+    const targetWidth = targetHeight * aspect;
+
+    // Position: 40 px to the right of the sketch bounding box, top-aligned. Without a sketch, keep viewport position.
+    const originX = modalBounds
+      ? modalBounds.x + modalBounds.width + 40
+      : -viewport.x / viewport.zoom + 220;
+    const originY = modalBounds
+      ? modalBounds.y
+      : -viewport.y / viewport.zoom + 160;
+
     const finalImageUrl = resolveImageUrl(imageUrl);
 
     const imgEl: WhiteboardElement = {
@@ -341,25 +348,18 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       type: "image",
       x: originX,
       y: originY,
-      width: finalWidth,
-      height: finalHeight,
+      width: targetWidth,
+      height: targetHeight,
       strokeColor: "#ffffff",
       strokeWidth: 1,
       imageUrl: finalImageUrl,
       points: []
     };
 
-    let nextElements: WhiteboardElement[];
-    if (modalCluster.length > 0) {
-      const clusterIds = new Set(modalCluster.map((el) => el.id));
-      nextElements = elements.filter((el) => !clusterIds.has(el.id));
-      nextElements.push(imgEl);
-    } else {
-      nextElements = [...elements, imgEl];
-    }
-
+    // Never remove or replace elements. Append one image element with commitElements, emitDraw, select it.
+    const nextElements = [...elements, imgEl];
     commitElements(nextElements);
-    collaboration?.emitReplace?.(nextElements);
+    collaboration?.emitDraw(imgEl);
     setTool("select");
     selectElement(imgEl.id);
   };
@@ -800,6 +800,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
         onClose={() => setIsAiImageModalOpen(false)}
         initialPrompt={modalPrompt}
         sketchBase64={modalSketchBase64}
+        isClusterUsed={modalIsClusterUsed}
         onGenerate={handleImageGenerated}
       />
     </>

@@ -244,7 +244,6 @@ export interface GenerateAiImageOptions {
   imageBase64?: string;
   prompt: string;
   styleId?: string;
-  literal?: number;
   seed?: number;
   aspect?: "square" | "portrait" | "landscape";
   bounds?: { width: number; height: number };
@@ -257,6 +256,15 @@ export interface GenerateAiImageResult {
   provider?: string;
   model?: string;
   sketchGuided?: boolean;
+  sketchIgnored?: string | null;
+}
+
+export async function getAiCapabilities(): Promise<{ sketch: boolean; sketchModel: string | null }> {
+  try {
+    return await request<{ sketch: boolean; sketchModel: string | null }>("/ai/capabilities");
+  } catch {
+    return { sketch: false, sketchModel: null };
+  }
 }
 
 /**
@@ -273,6 +281,7 @@ export async function generateAiImage(
     provider?: string;
     model?: string;
     sketchGuided?: boolean;
+    sketchIgnored?: string | null;
     seed?: number;
   }>("/ai/generate", {
     method: "POST",
@@ -285,6 +294,7 @@ export async function generateAiImage(
       provider: initial.provider,
       model: initial.model,
       sketchGuided: initial.sketchGuided,
+      sketchIgnored: initial.sketchIgnored,
       seed: initial.seed
     };
   }
@@ -294,7 +304,7 @@ export async function generateAiImage(
   }
 
   const jobId = initial.jobId;
-  const maxAttempts = 60; // Up to 90 seconds
+  const maxAttempts = 100; // 100 * 1500ms = 150 seconds (2.6)
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const status = await request<{
@@ -302,9 +312,12 @@ export async function generateAiImage(
       progress: number;
       imageUrl?: string;
       error?: string;
+      errorCode?: string;
+      retryAfter?: number;
       provider?: string;
       model?: string;
       sketchGuided?: boolean;
+      sketchIgnored?: string | null;
       seed?: number;
     }>(`/ai/job/${jobId}`);
 
@@ -316,12 +329,19 @@ export async function generateAiImage(
         provider: status.provider,
         model: status.model,
         sketchGuided: status.sketchGuided,
+        sketchIgnored: status.sketchIgnored,
         seed: status.seed
       };
     }
 
     if (status.status === "failed") {
-      throw new Error(status.error || "Image generation failed.");
+      const err = new Error(status.error || "Image generation failed.") as Error & {
+        code?: string;
+        retryAfter?: number;
+      };
+      err.code = status.errorCode;
+      err.retryAfter = status.retryAfter;
+      throw err;
     }
   }
 

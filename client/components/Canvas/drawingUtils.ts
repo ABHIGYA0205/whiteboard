@@ -4,6 +4,7 @@ import type {
   WhiteboardElement
 } from "@shared/types";
 import { resolveImageUrl } from "@/lib/api";
+import { sketchInkColor } from "@/lib/sketchInk";
 
 const HANDLE_SIZE = 12;
 
@@ -763,6 +764,127 @@ export function exportSelectionToImage(
   }
 
   return offscreen.toDataURL("image/png");
+}
+
+/**
+ * Exports whiteboard elements as a visible, scaled sketch formatted for AI conditioning.
+ * - Paints a #ffffff background
+ * - Draws each element with sketchInkColor(el.strokeColor) and theme "light"
+ * - Scales drawing so the long edge of the PNG is exactly 768 px, 24 px padding
+ * - Keeps strokes at least 3 px wide in the output
+ * - Adds white padding on the short axis if bounding box is more extreme than 2:1
+ * - Retries without image elements if toDataURL throws (tainted canvas), then returns null
+ */
+export function exportSketchForAi(
+  elements: WhiteboardElement[]
+): { dataUrl: string; width: number; height: number } | null {
+  if (!elements || elements.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const el of elements) {
+    const bounds = getNormalizedBounds(el);
+    if (el.type === "pencil" && el.points && el.points.length > 0) {
+      for (const pt of el.points) {
+        minX = Math.min(minX, pt.x);
+        minY = Math.min(minY, pt.y);
+        maxX = Math.max(maxX, pt.x);
+        maxY = Math.max(maxY, pt.y);
+      }
+    } else {
+      minX = Math.min(minX, bounds.x);
+      minY = Math.min(minY, bounds.y);
+      maxX = Math.max(maxX, bounds.x + bounds.width);
+      maxY = Math.max(maxY, bounds.y + bounds.height);
+    }
+  }
+
+  if (minX === Infinity || maxX === -Infinity) return null;
+
+  let boxW = maxX - minX;
+  let boxH = maxY - minY;
+  if (boxW <= 0 || boxH <= 0) return null;
+
+  // If the bounding box is more extreme than 2:1, add white padding on the short axis until it is 2:1
+  if (boxW / boxH > 2) {
+    const targetH = boxW / 2;
+    const diff = targetH - boxH;
+    minY -= diff / 2;
+    maxY += diff / 2;
+    boxH = targetH;
+  } else if (boxH / boxW > 2) {
+    const targetW = boxH / 2;
+    const diff = targetW - boxW;
+    minX -= diff / 2;
+    maxX += diff / 2;
+    boxW = targetW;
+  }
+
+  const padding = 24;
+  let outW = 768;
+  let outH = 768;
+  let scale = 1;
+
+  if (boxW >= boxH) {
+    outW = 768;
+    const innerW = outW - padding * 2; // 720
+    scale = innerW / boxW;
+    outH = Math.round(boxH * scale + padding * 2);
+  } else {
+    outH = 768;
+    const innerH = outH - padding * 2; // 720
+    scale = innerH / boxH;
+    outW = Math.round(boxW * scale + padding * 2);
+  }
+
+  const render = (items: WhiteboardElement[]): string => {
+    const offscreen = document.createElement("canvas");
+    offscreen.width = outW;
+    offscreen.height = outH;
+    const ctx = offscreen.getContext("2d");
+    if (!ctx) throw new Error("Could not create canvas context");
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outW, outH);
+
+    ctx.save();
+    ctx.translate(padding, padding);
+    ctx.scale(scale, scale);
+    ctx.translate(-minX, -minY);
+
+    for (const el of items) {
+      const rawStrokeWidth = el.strokeWidth || 1;
+      const minStrokeInModelCoords = 3 / scale;
+      const effectiveStrokeWidth = Math.max(rawStrokeWidth, minStrokeInModelCoords);
+
+      const modifiedEl: WhiteboardElement = {
+        ...el,
+        strokeColor: sketchInkColor(el.strokeColor),
+        strokeWidth: effectiveStrokeWidth
+      };
+
+      drawElement(ctx, modifiedEl, false, false, "light");
+    }
+
+    ctx.restore();
+    return offscreen.toDataURL("image/png");
+  };
+
+  try {
+    const dataUrl = render(elements);
+    return { dataUrl, width: outW, height: outH };
+  } catch {
+    try {
+      const nonImageElements = elements.filter((el) => el.type !== "image");
+      const dataUrl = render(nonImageElements);
+      return { dataUrl, width: outW, height: outH };
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**

@@ -14,19 +14,17 @@ import {
   Zap,
   Feather,
   Layers,
-  ArrowRight,
-  Sliders,
-  Image as ImageIcon
+  ArrowRight
 } from "lucide-react";
-import { generateAiImage, type GenerateAiImageResult } from "@/lib/api";
+import { generateAiImage, getAiCapabilities, type GenerateAiImageResult } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
-import { exportSelectionToImage } from "@/components/Canvas/drawingUtils";
 
 type AiImageModalProps = {
   isOpen: boolean;
   onClose: () => void;
   initialPrompt?: string;
   sketchBase64?: string;
+  isClusterUsed?: boolean;
   onGenerate: (imageUrl: string, width: number, height: number) => void;
 };
 
@@ -83,70 +81,55 @@ const EXAMPLE_PROMPTS = [
   "Minimalist modern tech logo for cloud platform"
 ];
 
-const FOLLOW_SKETCH_STEPS = [
-  { label: "Loosely", value: 0.2, description: "More creative freedom" },
-  { label: "Balanced", value: 0.5, description: "Balances sketch & style" },
-  { label: "Closely", value: 0.9, description: "Strictly adheres to lines" }
-];
-
 export function AiImageModal({
   isOpen,
   onClose,
   initialPrompt = "",
-  sketchBase64: passedSketchBase64,
+  sketchBase64,
+  isClusterUsed = false,
   onGenerate
 }: AiImageModalProps) {
   const [prompt, setPrompt] = useState("");
   const [selectedStyle, setSelectedStyle] = useState(AI_IMAGE_STYLES[0]);
-  const [literal, setLiteral] = useState<number>(0.5);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [activeSketch, setActiveSketch] = useState<string | undefined>(undefined);
+  const [clusterNotice, setClusterNotice] = useState(false);
+  const [capabilities, setCapabilities] = useState<{ sketch: boolean; sketchModel: string | null }>({
+    sketch: false,
+    sketchModel: null
+  });
   const [generatedResult, setGeneratedResult] = useState<GenerateAiImageResult | null>(null);
+  const [naturalDimensions, setNaturalDimensions] = useState<{ width: number; height: number }>({
+    width: 768,
+    height: 768
+  });
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const prevIsOpenRef = useRef(false);
   const theme = useBoardStore((state) => state.theme);
-  const elements = useBoardStore((state) => state.elements);
-  const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
-  const selectedElementId = useBoardStore((state) => state.selectedElementId);
-
   const isLight = theme === "light";
 
-  // Compute active sketch on open
+  // Capture sketch and initialize state ONCE when modal opens (2.3)
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !prevIsOpenRef.current) {
       setPrompt(initialPrompt || "");
       setError(null);
       setProgress(0);
       setIsGenerating(false);
       setGeneratedResult(null);
+      setActiveSketch(sketchBase64 || undefined);
+      setClusterNotice(Boolean(isClusterUsed));
 
-      if (passedSketchBase64) {
-        setActiveSketch(passedSketchBase64);
-      } else {
-        // Fallback sketch capture from canvas
-        const activeIds = selectedElementIds.length > 0
-          ? selectedElementIds
-          : (selectedElementId ? [selectedElementId] : []);
-
-        if (activeIds.length > 0) {
-          const selected = elements.filter((el) => activeIds.includes(el.id));
-          if (selected.length > 0) {
-            setActiveSketch(exportSelectionToImage(selected) || undefined);
-          } else {
-            setActiveSketch(undefined);
-          }
-        } else if (elements.length > 0) {
-          setActiveSketch(exportSelectionToImage(elements) || undefined);
-        } else {
-          setActiveSketch(undefined);
-        }
-      }
+      getAiCapabilities().then((caps) => {
+        setCapabilities(caps);
+      });
 
       setTimeout(() => inputRef.current?.focus(), 60);
     }
-  }, [isOpen, initialPrompt, passedSketchBase64, elements, selectedElementIds, selectedElementId]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, initialPrompt, sketchBase64, isClusterUsed]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -159,6 +142,22 @@ export function AiImageModal({
   }, [isOpen, isGenerating, onClose]);
 
   if (!isOpen) return null;
+
+  const hasSketch = Boolean(activeSketch);
+  const isSketchBackendAvailable = Boolean(capabilities.sketch);
+
+  // Label calculations (3.7)
+  let badgeLabel = "No sketch - text only";
+  let buttonLabel = "Generate from text";
+  if (hasSketch) {
+    if (isSketchBackendAvailable) {
+      badgeLabel = "Sketch-guided";
+      buttonLabel = "Generate from sketch";
+    } else {
+      badgeLabel = "Text only";
+      buttonLabel = "Generate from text";
+    }
+  }
 
   const handleGenerate = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -179,8 +178,7 @@ export function AiImageModal({
           imageBase64: activeSketch,
           prompt: cleanPrompt,
           styleId: selectedStyle.id,
-          literal,
-          allowTextOnly: !activeSketch
+          allowTextOnly: !hasSketch || !isSketchBackendAvailable
         },
         (p) => setProgress(Math.max(15, p))
       );
@@ -188,7 +186,14 @@ export function AiImageModal({
       setProgress(100);
       setGeneratedResult(res);
     } catch (err: any) {
-      setError(err?.message || "Image service unavailable, try again.");
+      if (err?.code === "RATE_LIMITED") {
+        const seconds = err.retryAfter || 45;
+        setError(
+          `The free image service allows one picture every 45 seconds for everyone using this app. Try again in ${seconds} s.`
+        );
+      } else {
+        setError(err?.message || "Image service unavailable, try again.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -196,10 +201,29 @@ export function AiImageModal({
 
   const handleInsert = () => {
     if (generatedResult?.imageUrl) {
-      onGenerate(generatedResult.imageUrl, 400, 400);
+      onGenerate(
+        generatedResult.imageUrl,
+        naturalDimensions.width || 400,
+        naturalDimensions.height || 400
+      );
       onClose();
     }
   };
+
+  // Result caption calculation (3.7)
+  let resultCaption = "";
+  if (generatedResult) {
+    const modelName = generatedResult.model || "flux";
+    if (generatedResult.sketchIgnored === "blank") {
+      resultCaption = "Your sketch looked empty, so it was not used.";
+    } else if (generatedResult.sketchGuided) {
+      resultCaption = `AI - ${modelName} - guided by your sketch`;
+    } else if (hasSketch) {
+      resultCaption = `AI - ${modelName} - text only, your sketch was not used`;
+    } else {
+      resultCaption = `AI - ${modelName} - text only`;
+    }
+  }
 
   return (
     <div
@@ -279,20 +303,22 @@ export function AiImageModal({
                     letterSpacing: "0.08em",
                     padding: "2px 8px",
                     borderRadius: "9999px",
-                    background: activeSketch
+                    background: hasSketch && isSketchBackendAvailable
                       ? isLight ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.25)"
                       : isLight ? "rgba(139, 92, 246, 0.12)" : "rgba(139, 92, 246, 0.25)",
-                    color: activeSketch ? (isLight ? "#059669" : "#34d399") : (isLight ? "#7c3aed" : "#c084fc"),
-                    border: activeSketch
+                    color: hasSketch && isSketchBackendAvailable
+                      ? (isLight ? "#059669" : "#34d399")
+                      : (isLight ? "#7c3aed" : "#c084fc"),
+                    border: hasSketch && isSketchBackendAvailable
                       ? "1px solid rgba(16, 185, 129, 0.3)"
                       : "1px solid rgba(139, 92, 246, 0.3)"
                   }}
                 >
-                  {activeSketch ? "Sketch Conditioned" : "Text to Image"}
+                  {badgeLabel}
                 </span>
               </div>
               <p style={{ margin: "4px 0 0", fontSize: "13px", color: isLight ? "#64748b" : "#94a3b8" }}>
-                Condition artwork directly on your drawing or generate from text
+                Generate images from your whiteboard drawing or text description
               </p>
             </div>
           </div>
@@ -314,7 +340,7 @@ export function AiImageModal({
           </button>
         </div>
 
-        {/* Result Preview Screen if generated */}
+        {/* Result Preview Screen */}
         {generatedResult ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "16px", alignItems: "center" }}>
             <div
@@ -334,6 +360,15 @@ export function AiImageModal({
               <img
                 src={generatedResult.imageUrl}
                 alt={prompt}
+                onLoad={(e) => {
+                  const target = e.currentTarget;
+                  if (target.naturalWidth && target.naturalHeight) {
+                    setNaturalDimensions({
+                      width: target.naturalWidth,
+                      height: target.naturalHeight
+                    });
+                  }
+                }}
                 style={{
                   maxWidth: "100%",
                   maxHeight: "360px",
@@ -343,23 +378,19 @@ export function AiImageModal({
               />
             </div>
 
-            {/* Provenance Caption */}
+            {/* Provenance Caption (3.7) */}
             <div
               style={{
                 fontSize: "12px",
                 fontWeight: 600,
-                color: isLight ? "#64748b" : "#94a3b8",
+                color: isLight ? "#475569" : "#cbd5e1",
                 textAlign: "center",
                 padding: "6px 12px",
                 borderRadius: "8px",
                 background: isLight ? "#f1f5f9" : "rgba(255, 255, 255, 0.05)"
               }}
             >
-              AI · {generatedResult.model ? `${generatedResult.model} via ` : ""}
-              {generatedResult.provider || "AI"} ·{" "}
-              {generatedResult.sketchGuided
-                ? "guided by your sketch"
-                : "text only (your sketch was not used)"}
+              {resultCaption}
             </div>
 
             {/* Action buttons */}
@@ -410,39 +441,59 @@ export function AiImageModal({
           /* Input Form */
           <form onSubmit={handleGenerate} style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             {/* Sketch Preview Badge or Subtle Notice */}
-            {activeSketch ? (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "12px",
-                  padding: "10px 14px",
-                  borderRadius: "12px",
-                  background: isLight ? "#f0fdf4" : "rgba(16, 185, 129, 0.1)",
-                  border: isLight ? "1px solid #bbf7d0" : "1px solid rgba(16, 185, 129, 0.25)"
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={activeSketch}
-                  alt="Sketch"
+            {hasSketch ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div
                   style={{
-                    width: "40px",
-                    height: "40px",
-                    objectFit: "contain",
-                    borderRadius: "6px",
-                    background: "#ffffff",
-                    border: "1px solid rgba(0,0,0,0.1)"
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "12px",
+                    padding: "10px 14px",
+                    borderRadius: "12px",
+                    background: isLight ? "#f8fafc" : "rgba(255, 255, 255, 0.03)",
+                    border: isLight ? "1px solid #e2e8f0" : "1px solid rgba(255, 255, 255, 0.08)"
                   }}
-                />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "12px", fontWeight: 700, color: isLight ? "#166534" : "#4ade80" }}>
-                    Conditioning on your drawing
-                  </div>
-                  <div style={{ fontSize: "11px", color: isLight ? "#15803d" : "#86efac" }}>
-                    The output pose, structure, and shapes will follow your sketch.
+                >
+                  {/* Exact PNG thumbnail (2.3) */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={activeSketch}
+                    alt="Sketch thumbnail"
+                    style={{
+                      width: "48px",
+                      height: "48px",
+                      objectFit: "contain",
+                      borderRadius: "6px",
+                      background: "#ffffff",
+                      border: "1px solid rgba(0,0,0,0.15)"
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "12px", fontWeight: 700, color: isLight ? "#1e293b" : "#f1f5f9" }}>
+                      This is what the AI will see
+                    </div>
+                    {clusterNotice && (
+                      <div style={{ fontSize: "11px", color: isLight ? "#64748b" : "#94a3b8", marginTop: "2px" }}>
+                        Using the drawing around your last stroke. Select shapes first to choose exactly what is sent.
+                      </div>
+                    )}
                   </div>
                 </div>
+
+                {!isSketchBackendAvailable && (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: isLight ? "#b45309" : "#fcd34d",
+                      background: isLight ? "#fef3c7" : "rgba(245, 158, 11, 0.12)",
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      border: isLight ? "1px solid #fde68a" : "1px solid rgba(245, 158, 11, 0.25)"
+                    }}
+                  >
+                    Sketch-guided generation is not set up on this server. The picture will be made from your text only.
+                  </div>
+                )}
               </div>
             ) : (
               <div
@@ -453,7 +504,7 @@ export function AiImageModal({
                   padding: "4px 2px"
                 }}
               >
-                No sketch — text only
+                No sketch - text only
               </div>
             )}
 
@@ -471,7 +522,7 @@ export function AiImageModal({
                   Describe Your Image
                 </label>
                 <span style={{ fontSize: "11px", color: isLight ? "#94a3b8" : "#64748b" }}>
-                  {prompt.length}/200
+                  {prompt.length}/300
                 </span>
               </div>
               <input
@@ -483,7 +534,7 @@ export function AiImageModal({
                   if (error) setError(null);
                 }}
                 disabled={isGenerating}
-                maxLength={200}
+                maxLength={300}
                 placeholder="e.g. A cybernetic warrior standing in the rain"
                 aria-label="Image prompt description"
                 style={{
@@ -509,60 +560,6 @@ export function AiImageModal({
                 }}
               />
             </div>
-
-            {/* Follow My Sketch Control (only when sketch is present) */}
-            {activeSketch && (
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                  <Sliders size={13} style={{ color: "#8b5cf6" }} />
-                  <label
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      color: isLight ? "#1e293b" : "#e2e8f0"
-                    }}
-                  >
-                    How much should it follow your drawing?
-                  </label>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
-                  {FOLLOW_SKETCH_STEPS.map((step) => {
-                    const isSelected = literal === step.value;
-                    return (
-                      <button
-                        key={step.label}
-                        type="button"
-                        disabled={isGenerating}
-                        onClick={() => setLiteral(step.value)}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: "10px",
-                          border: isSelected
-                            ? "2px solid #6366f1"
-                            : isLight
-                            ? "1px solid rgba(0, 0, 0, 0.08)"
-                            : "1px solid rgba(255, 255, 255, 0.08)",
-                          background: isSelected
-                            ? isLight
-                              ? "rgba(99, 102, 241, 0.1)"
-                              : "rgba(99, 102, 241, 0.2)"
-                            : isLight
-                            ? "#f8fafc"
-                            : "rgba(255, 255, 255, 0.03)",
-                          color: isSelected ? (isLight ? "#4338ca" : "#a5b4fc") : isLight ? "#475569" : "#94a3b8",
-                          cursor: "pointer",
-                          textAlign: "center",
-                          transition: "all 0.15s ease"
-                        }}
-                      >
-                        <div style={{ fontSize: "12px", fontWeight: isSelected ? 700 : 600 }}>{step.label}</div>
-                        <div style={{ fontSize: "10px", opacity: 0.8, marginTop: "2px" }}>{step.description}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             {/* Quick Inspirations */}
             <div>
@@ -713,7 +710,7 @@ export function AiImageModal({
                     fontWeight: 700
                   }}
                 >
-                  <span>Synthesizing artwork with AI...</span>
+                  <span>Generating image with AI...</span>
                   <span>{progress}%</span>
                 </div>
                 <div
@@ -738,7 +735,7 @@ export function AiImageModal({
               </div>
             )}
 
-            {/* Submit Button */}
+            {/* Submit Button (3.7) */}
             <button
               type="submit"
               disabled={isGenerating || !prompt.trim()}
@@ -772,12 +769,12 @@ export function AiImageModal({
               {isGenerating ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  <span>Conditioning & Generating...</span>
+                  <span>Generating...</span>
                 </>
               ) : (
                 <>
                   <Sparkles size={18} />
-                  <span>Generate Artwork</span>
+                  <span>{buttonLabel}</span>
                   <ArrowRight size={16} />
                 </>
               )}
