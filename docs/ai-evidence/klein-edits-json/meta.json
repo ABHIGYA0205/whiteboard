@@ -1,0 +1,21 @@
+{
+  "candidate": "klein-edits-json",
+  "description": "klein via POST /v1/images/edits (JSON, image=SKETCH_URL)",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 10.2,
+    "seed": 424242,
+    "prompt": "Turn this rough black-and-white sketch into a finished picture: one red apple on a plain light grey background, studio product photo. Follow the sketch exactly: every drawn shape stays in the same position and at the same size. Replace the sketch lines with the finished picture.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits (json) model=klein size=768x768 seed=424242 image=https://media.pollinations.ai/49094f48-b5b0-4ae4-8373-2a950dd30c6c"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 9.8,
+    "seed": 424242,
+    "prompt": "Turn this rough black-and-white sketch into a finished picture: one red apple on a plain light grey background, studio product photo. Follow the sketch exactly: every drawn shape stays in the same position and at the same size. Replace the sketch lines with the finished picture.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits (json) model=klein size=768x768 seed=424242 image=https://media.pollinations.ai/2c2ced66-1e2e-41ae-9079-f8b383fad45c"
+  }
+}

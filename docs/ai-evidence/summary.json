@@ -1,0 +1,82 @@
+{
+  "probeSubject": "one red apple on a plain light grey background, studio product photo",
+  "seed": 424242,
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "hasKey": true,
+  "results": [
+    {
+      "id": "klein-edits",
+      "description": "klein via POST /v1/images/edits (sketch uploaded as a file)",
+      "pass": false,
+      "reasons": [
+        "WRONG PLACE: right sketch -> apple centre at x=0.52 (need >= 0.55)"
+      ],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0.077,
+        "leftRedFraction": 0.152,
+        "rightRedFraction": 0.1686,
+        "leftCentroidX": 0.399,
+        "rightCentroidX": 0.519
+      }
+    },
+    {
+      "id": "klein-edits-json",
+      "description": "klein via POST /v1/images/edits (JSON, image=SKETCH_URL)",
+      "pass": false,
+      "reasons": [
+        "WRONG PLACE: right sketch -> apple centre at x=0.52 (need >= 0.55)"
+      ],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0.077,
+        "leftRedFraction": 0.152,
+        "rightRedFraction": 0.1686,
+        "leftCentroidX": 0.399,
+        "rightCentroidX": 0.519
+      }
+    },
+    {
+      "id": "klein-url",
+      "description": "klein via GET /image/{prompt}?image=SKETCH_URL",
+      "pass": false,
+      "reasons": [
+        "WRONG PLACE: right sketch -> apple centre at x=0.52 (need >= 0.55)"
+      ],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0.077,
+        "leftRedFraction": 0.152,
+        "rightRedFraction": 0.1686,
+        "leftCentroidX": 0.399,
+        "rightCentroidX": 0.519
+      }
+    },
+    {
+      "id": "anonymous-baseline",
+      "description": "what the app does today: image.pollinations.ai without a key",
+      "pass": false,
+      "reasons": [
+        "SKETCH IGNORED: the two pictures are pixel-identical (sensitivity 0.0000, need >= 0.03)",
+        "WRONG PLACE: left sketch -> apple centre at x=0.59 (need <= 0.45)"
+      ],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0,
+        "leftRedFraction": 0.1972,
+        "rightRedFraction": 0.1972,
+        "leftCentroidX": 0.586,
+        "rightCentroidX": 0.586
+      }
+    }
+  ]
+}

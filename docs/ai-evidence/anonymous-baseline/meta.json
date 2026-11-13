@@ -1,0 +1,23 @@
+{
+  "candidate": "anonymous-baseline",
+  "description": "what the app does today: image.pollinations.ai without a key",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 1.7,
+    "seed": 424242,
+    "prompt": "one red apple on a plain light grey background, studio product photo",
+    "modelUsed": "sana",
+    "request": "GET https://image.pollinations.ai/prompt/one%20red%20apple%20on%20a%20plain%20light%20grey%20background%2C%20studio%20product%20photo?model=klein&image=https%3A%2F%2Fmedia.pollinations.ai%2F49094f48-b5b0-4ae4-8373-2a950dd30c6c&seed=424242&width=768&height=768&nologo=true"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 48.9,
+    "seed": 424242,
+    "prompt": "one red apple on a plain light grey background, studio product photo",
+    "modelUsed": "sana",
+    "request": "GET https://image.pollinations.ai/prompt/one%20red%20apple%20on%20a%20plain%20light%20grey%20background%2C%20studio%20product%20photo?model=klein&image=https%3A%2F%2Fmedia.pollinations.ai%2F2c2ced66-1e2e-41ae-9079-f8b383fad45c&seed=424242&width=768&height=768&nologo=true"
+  }
+}

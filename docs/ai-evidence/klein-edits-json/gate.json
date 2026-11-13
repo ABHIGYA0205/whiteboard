@@ -1,0 +1,22 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/klein-edits-json",
+  "pass": false,
+  "reasons": [
+    "WRONG PLACE: right sketch -> apple centre at x=0.52 (need >= 0.55)"
+  ],
+  "metrics": {
+    "leftSize": "768x768",
+    "rightSize": "768x768",
+    "sensitivity": 0.077,
+    "leftRedFraction": 0.152,
+    "rightRedFraction": 0.1686,
+    "leftCentroidX": 0.399,
+    "rightCentroidX": 0.519
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/anonymous-baseline",
+  "pass": false,
+  "reasons": [
+    "SKETCH IGNORED: the two pictures are pixel-identical (sensitivity 0.0000, need >= 0.03)",
+    "WRONG PLACE: left sketch -> apple centre at x=0.59 (need <= 0.45)"
+  ],
+  "metrics": {
+    "leftSize": "768x768",
+    "rightSize": "768x768",
+    "sensitivity": 0,
+    "leftRedFraction": 0.1972,
+    "rightRedFraction": 0.1972,
+    "leftCentroidX": 0.586,
+    "rightCentroidX": 0.586
+  }
+}

@@ -64,6 +64,9 @@ function validateEnv() {
     port,
     mongoUri,
     hfToken: process.env.HF_TOKEN ?? "",
+    get pollinationsApiKey(): string {
+      return process.env.POLLINATIONS_API_KEY?.trim() || "";
+    },
     clientOrigin: configuredOrigins[0] || "http://localhost:3000",
     clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins,
     get boardSecret(): string {

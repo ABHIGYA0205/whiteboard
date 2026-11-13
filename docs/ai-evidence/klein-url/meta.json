@@ -1,0 +1,23 @@
+{
+  "candidate": "klein-url",
+  "description": "klein via GET /image/{prompt}?image=SKETCH_URL",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 9.2,
+    "seed": 424242,
+    "prompt": "Turn this rough black-and-white sketch into a finished picture: one red apple on a plain light grey background, studio product photo. Follow the sketch exactly: every drawn shape stays in the same position and at the same size. Replace the sketch lines with the finished picture.",
+    "modelUsed": "black-forest-labs/flux.2-klein-4b",
+    "request": "GET https://gen.pollinations.ai/image/<prompt>?model=klein&image=https%3A%2F%2Fmedia.pollinations.ai%2F49094f48-b5b0-4ae4-8373-2a950dd30c6c&seed=424242&width=768&height=768"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 11.6,
+    "seed": 424242,
+    "prompt": "Turn this rough black-and-white sketch into a finished picture: one red apple on a plain light grey background, studio product photo. Follow the sketch exactly: every drawn shape stays in the same position and at the same size. Replace the sketch lines with the finished picture.",
+    "modelUsed": "black-forest-labs/flux.2-klein-4b",
+    "request": "GET https://gen.pollinations.ai/image/<prompt>?model=klein&image=https%3A%2F%2Fmedia.pollinations.ai%2F2c2ced66-1e2e-41ae-9079-f8b383fad45c&seed=424242&width=768&height=768"
+  }
+}
