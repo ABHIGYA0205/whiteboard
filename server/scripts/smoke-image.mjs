@@ -1,220 +1,171 @@
-import dotenv from "dotenv";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import fs from "node:fs";
-import zlib from "node:zlib";
 import express from "express";
+import sharp from "sharp";
+import dotenv from "dotenv";
+import { writeSketches, checkDir, PROBE_SUBJECT, PROBE_SEED } from "./sketch-probe.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, "..", "..");
+const EVIDENCE_APP = path.join(ROOT, "docs", "ai-evidence", "app");
+dotenv.config({ path: path.resolve(HERE, "../.env") });
 
-function createStickFigurePng(width = 512, height = 512) {
-  const stride = width + 1;
-  const raw = Buffer.alloc(height * stride, 255);
-  for (let y = 0; y < height; y++) raw[y * stride] = 0;
-
-  function setPixel(x, y, v = 0) {
-    if (x >= 0 && x < width && y >= 0 && y < height) raw[y * stride + 1 + x] = v;
+async function getImageBuffer(url, baseUrl) {
+  if (url.startsWith("data:")) {
+    const comma = url.indexOf(",");
+    return Buffer.from(url.slice(comma + 1), "base64");
   }
-
-  function drawLine(x0, y0, x1, y1, thickness = 4) {
-    const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
-    const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-    let err = dx - dy, x = x0, y = y0;
-    while (true) {
-      for (let ox = -thickness; ox <= thickness; ox++) {
-        for (let oy = -thickness; oy <= thickness; oy++) {
-          if (ox * ox + oy * oy <= thickness * thickness) setPixel(x + ox, y + oy, 0);
-        }
-      }
-      if (x === x1 && y === y1) break;
-      const e2 = 2 * err;
-      if (e2 > -dy) { err -= dy; x += sx; }
-      if (e2 < dx) { err += dx; y += sy; }
-    }
+  const fullUrl = url.startsWith("http://") || url.startsWith("https://") ? url : `${baseUrl}${url}`;
+  const res = await fetch(fullUrl);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch image from ${fullUrl}: ${res.status}`);
   }
+  return Buffer.from(await res.arrayBuffer());
+}
 
-  function drawCircle(cx, cy, r, thickness = 4) {
-    for (let dy = -r - thickness; dy <= r + thickness; dy++) {
-      for (let dx = -r - thickness; dx <= r + thickness; dx++) {
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (Math.abs(d - r) <= thickness / 2) setPixel(cx + dx, cy + dy, 0);
-      }
-    }
+async function saveImage(url, baseUrl, outBasePath) {
+  const buf = await getImageBuffer(url, baseUrl);
+  const meta = await sharp(buf).metadata();
+  if (!meta.format) {
+    throw new Error(`Downloaded image is not decodable`);
   }
-
-  // Head
-  drawCircle(256, 140, 45, 4);
-  // Torso
-  drawLine(256, 185, 256, 330, 4);
-  // Arms
-  drawLine(256, 220, 170, 260, 4);
-  drawLine(256, 220, 340, 260, 4);
-  // Stick in right hand
-  drawLine(340, 160, 340, 420, 6);
-  // Legs
-  drawLine(256, 330, 200, 440, 4);
-  drawLine(256, 330, 312, 440, 4);
-
-  const compressed = zlib.deflateSync(raw);
-
-  function crc32(buf) {
-    let crc = 0xffffffff;
-    for (let i = 0; i < buf.length; i++) {
-      crc ^= buf[i];
-      for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  }
-
-  function makeChunk(type, data) {
-    const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
-    const typeBuf = Buffer.from(type, "ascii");
-    const crcBuf = Buffer.alloc(4);
-    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-    return Buffer.concat([len, typeBuf, data, crcBuf]);
-  }
-
-  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-
-  return Buffer.concat([sig, makeChunk("IHDR", ihdr), makeChunk("IDAT", compressed), makeChunk("IEND", Buffer.alloc(0))]);
+  const ext = meta.format === "jpeg" ? "jpg" : meta.format;
+  const outPath = `${outBasePath}.${ext}`;
+  fs.writeFileSync(outPath, buf);
+  return { path: outPath, ext, buf, meta };
 }
 
 async function main() {
-  console.log("=== SMOKE TEST: SKETCH-CONDITIONED AI IMAGE GENERATION ===");
+  fs.mkdirSync(EVIDENCE_APP, { recursive: true });
 
-  const prompt = "a man with a stick";
-  const seed = Math.floor(Math.random() * 900000) + 100000;
+  console.log("=== SMOKE TEST: AI IMAGE GENERATION ===");
 
-  console.log("1. Creating stick-figure PNG sketch...");
-  const pngBuffer = createStickFigurePng();
-  const sketchBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+  const { aiRouter } = await import("../dist/routes/ai.js");
+  const { getUploadsDir } = await import("../dist/utils/storage.js");
 
-  // Check if a server is already listening
-  let baseUrl = process.env.API_URL || "http://127.0.0.1:4000";
-  let serverInstance = null;
+  const app = express();
+  app.use(express.json({ limit: "16mb" }));
+  app.use("/ai", aiRouter);
+  app.use("/uploads", express.static(getUploadsDir()));
 
-  try {
-    const ping = await fetch(`${baseUrl}/ai/job/ping-check`, { signal: AbortSignal.timeout(1000) });
-  } catch {
-    // Start temporary express server on ephemeral port
-    console.log("   No active server found, starting standalone test server on ephemeral port...");
-    const { aiRouter } = await import("../dist/routes/ai.js");
-    const app = express();
-    app.use(express.json({ limit: "16mb" }));
-    app.use("/ai", aiRouter);
-    serverInstance = await new Promise((resolve) => {
-      const s = app.listen(0, "127.0.0.1", () => resolve(s));
-    });
-    const port = serverInstance.address().port;
-    baseUrl = `http://127.0.0.1:${port}`;
-    console.log(`   Temporary server listening at ${baseUrl}`);
-  }
-
-  const startTime = Date.now();
-  console.log(`2. Submitting POST /ai/generate with prompt="${prompt}", seed=${seed}...`);
-
-  const generateRes = await fetch(`${baseUrl}/ai/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      prompt,
-      imageBase64: sketchBase64,
-      seed,
-      literal: 0.5,
-      aspect: "square"
-    })
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
   });
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
 
-  if (!generateRes.ok) {
-    const errText = await generateRes.text();
-    if (serverInstance) serverInstance.close();
-    throw new Error(`POST /ai/generate failed with status ${generateRes.status}: ${errText}`);
-  }
-
-  const initData = await generateRes.json();
-  let completedData = null;
-
-  if (initData.imageUrl) {
-    console.log("   Cache hit! Instant return.");
-    completedData = initData;
-  } else {
-    const jobId = initData.jobId;
-    console.log(`   Job submitted: ${jobId}. Polling status...`);
-
-    const maxWaitSeconds = 60;
-    const pollIntervalMs = 1500;
-    const maxPolls = Math.ceil((maxWaitSeconds * 1000) / pollIntervalMs);
-
-    for (let i = 0; i < maxPolls; i++) {
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
-      const statusRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-      if (!statusRes.ok) continue;
-
-      const data = await statusRes.json();
-      process.stdout.write(`\r   Polling... progress: ${data.progress}% (status: ${data.status})`);
-
-      if (data.status === "completed" && data.imageUrl) {
-        process.stdout.write("\n");
-        completedData = data;
-        break;
+  async function submitAndPoll(body) {
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (res.status === 409) {
+      const data = await res.json();
+      return { status: 409, data };
+    }
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`POST /ai/generate failed (${res.status}): ${errText}`);
+    }
+    const init = await res.json();
+    if (init.imageUrl) {
+      return { status: 200, job: init };
+    }
+    const jobId = init.jobId;
+    const start = Date.now();
+    while (Date.now() - start < 150000) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const pollRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
+      if (!pollRes.ok) continue;
+      const job = await pollRes.json();
+      if (job.status === "completed") {
+        return { status: 200, job };
       }
-
-      if (data.status === "failed") {
-        process.stdout.write("\n");
-        if (serverInstance) serverInstance.close();
-        throw new Error(`Generation failed: ${data.error || "Unknown error"}`);
+      if (job.status === "failed") {
+        throw new Error(`Job failed: ${job.error || "Unknown error"} (code: ${job.errorCode})`);
       }
     }
+    throw new Error(`Job ${jobId} timed out`);
   }
 
-  if (serverInstance) {
-    serverInstance.close();
+  try {
+    // 1. Text check: POST /ai/generate once without a sketch; require a decodable image and sketchGuided: false; save as docs/ai-evidence/app/text.out.<ext>
+    console.log("1. Running text check (no sketch)...");
+    const textResult = await submitAndPoll({
+      prompt: "a majestic mountain landscape at sunset",
+      seed: PROBE_SEED
+    });
+
+    if (textResult.status !== 200 || !textResult.job.imageUrl) {
+      throw new Error("Text check failed to return an image URL");
+    }
+    if (textResult.job.sketchGuided !== false) {
+      throw new Error(`Text check expected sketchGuided: false, got ${textResult.job.sketchGuided}`);
+    }
+
+    const savedText = await saveImage(textResult.job.imageUrl, baseUrl, path.join(EVIDENCE_APP, "text.out"));
+    console.log(`   Saved text check image to ${savedText.path} (${savedText.meta.width}x${savedText.meta.height}, ${savedText.meta.format})`);
+
+    // 2. Call GET /ai/capabilities. If sketch is false, print "no sketch-capable backend configured" and exit with code 3
+    console.log("2. Checking capabilities...");
+    const capRes = await fetch(`${baseUrl}/ai/capabilities`);
+    const caps = await capRes.json();
+    console.log(`   Capabilities: sketch=${caps.sketch}, sketchModel=${caps.sketchModel}`);
+
+    if (!caps.sketch) {
+      console.log("no sketch-capable backend configured");
+      server.close();
+      process.exit(3);
+    }
+
+    // 3. Sketch check (Outcome A): POST /ai/generate twice, with left.png and right.png, same PROBE_SUBJECT, same PROBE_SEED, no style
+    console.log("3. Running sketch check with left.png and right.png...");
+    const sketches = await writeSketches();
+    const leftBase64 = `data:image/png;base64,${sketches.left.buffer.toString("base64")}`;
+    const rightBase64 = `data:image/png;base64,${sketches.right.buffer.toString("base64")}`;
+
+    const leftRes = await submitAndPoll({
+      prompt: PROBE_SUBJECT,
+      imageBase64: leftBase64,
+      seed: PROBE_SEED
+    });
+    if (leftRes.status !== 200 || !leftRes.job.imageUrl || leftRes.job.sketchGuided !== true) {
+      throw new Error("Left sketch check failed or sketchGuided is not true");
+    }
+    await saveImage(leftRes.job.imageUrl, baseUrl, path.join(EVIDENCE_APP, "left.out"));
+
+    const rightRes = await submitAndPoll({
+      prompt: PROBE_SUBJECT,
+      imageBase64: rightBase64,
+      seed: PROBE_SEED
+    });
+    if (rightRes.status !== 200 || !rightRes.job.imageUrl || rightRes.job.sketchGuided !== true) {
+      throw new Error("Right sketch check failed or sketchGuided is not true");
+    }
+    await saveImage(rightRes.job.imageUrl, baseUrl, path.join(EVIDENCE_APP, "right.out"));
+
+    const meta = {
+      left: { prompt: PROBE_SUBJECT, seed: PROBE_SEED, job: leftRes.job },
+      right: { prompt: PROBE_SUBJECT, seed: PROBE_SEED, job: rightRes.job }
+    };
+    fs.writeFileSync(path.join(EVIDENCE_APP, "meta.json"), JSON.stringify(meta, null, 2));
+
+    console.log("4. Running checkDir on docs/ai-evidence/app...");
+    const gate = await checkDir(EVIDENCE_APP);
+    server.close();
+
+    if (!gate.pass) {
+      throw new Error(`Gate failed for app evidence: ${gate.reason}`);
+    }
+    console.log("PASS");
+    process.exit(0);
+  } catch (err) {
+    server.close();
+    console.error("Error in smoke test:", err);
+    process.exit(1);
   }
-
-  if (!completedData || !completedData.imageUrl) {
-    throw new Error("Generation timed out without returning an image URL.");
-  }
-
-  const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
-
-  console.log("\n3. Validating provenance...");
-  if (completedData.sketchGuided !== true) {
-    throw new Error(
-      `FAILURE: sketch was supplied but sketchGuided is false! Result did not condition on sketch.`
-    );
-  }
-
-  console.log("4. Downloading and saving output image to disk...");
-  const imgRes = await fetch(completedData.imageUrl);
-  if (!imgRes.ok) {
-    throw new Error(`Failed to download result image from ${completedData.imageUrl}`);
-  }
-  const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-  const ext = completedData.imageUrl.endsWith(".webp")
-    ? "webp"
-    : completedData.imageUrl.endsWith(".png")
-    ? "png"
-    : "jpeg";
-  const outputPath = path.resolve(__dirname, `smoke-result.${ext}`);
-  fs.writeFileSync(outputPath, imgBuffer);
-
-  console.log("\n==========================================");
-  console.log("SMOKE TEST PASSED SUCCESSFULLY");
-  console.log("==========================================");
-  console.log(`Provider:     ${completedData.provider || "Pollinations"}`);
-  console.log(`Model:        ${completedData.model || "sana"}`);
-  console.log(`Seed:         ${completedData.seed ?? seed}`);
-  console.log(`Duration:     ${elapsedSeconds}s`);
-  console.log(`sketchGuided: ${completedData.sketchGuided}`);
-  console.log(`Image saved:  ${outputPath} (${imgBuffer.length} bytes)`);
-  console.log("==========================================\n");
 }
 
-main().catch((err) => {
-  console.error("\n❌ Smoke test failed:", err.message);
-  process.exit(1);
-});
+main();

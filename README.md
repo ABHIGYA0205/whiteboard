@@ -12,7 +12,7 @@ graph TD
     Client -->|REST API /board, /ai, /uploads| Server
     Server -->|Persist Elements & Versioning| Mongo[(MongoDB)]
     Server -->|Static Uploads /uploads| FS[(Disk Storage)]
-    Server -->|AI Image Gen| HF[HuggingFace / AI Horde]
+    Server -->|AI Image Gen| AI[Pollinations.AI]
 ```
 
 ---
@@ -103,6 +103,13 @@ MONGO_URI=mongodb://127.0.0.1:27017/whiteboard
 CLIENT_ORIGIN=http://localhost:3000,http://localhost:3001
 HF_TOKEN=your_token_optional
 ```
+
+#### AI Generation (Optional)
+
+| Variable | Description |
+|---|---|
+| `POLLINATIONS_API_KEY` | Pollinations API key (`https://enter.pollinations.ai`). Enables authenticated text-to-image models (e.g. `flux`) and higher capacity. Without it, AI images are text-only and share one free picture per 45 seconds across all users. |
+| `POLLINATIONS_TEXT_MODEL` | Optional model name for text generation with key (defaults to `flux`). |
 
 #### Vercel Blob Storage (Preferred; Optional)
 

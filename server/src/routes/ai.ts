@@ -1,15 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "crypto";
+import { PNG } from "pngjs";
 import { env } from "../utils/env";
 import { saveBase64Image } from "../utils/storage";
 
 export const aiRouter = Router();
-
-const HORDE_BASE = "https://aihorde.net/api/v2";
-const ANON_KEY = "0000000000";
-
-export const DEFAULT_NEGATIVE_PROMPT =
-  "blurry, low quality, jpeg artifacts, watermark, text, signature, extra limbs, extra fingers, duplicate person, two people, cropped, deformed, sketch lines, rough pencil strokes";
 
 export const STYLE_PRESETS: Record<string, string> = {
   digital: "vibrant digital art, trending on artstation, detailed illustration",
@@ -21,139 +16,120 @@ export const STYLE_PRESETS: Record<string, string> = {
   vector: "clean modern vector illustration, minimalist, flat colors"
 };
 
-export class PromptResult extends String {
-  prompt: string;
-  negativePrompt: string;
-  enhance: boolean;
-  composition: string;
-  qualityTail: string;
+export interface SketchInspection {
+  width: number;
+  height: number;
+  inkPixels: number;
+  isBlank: boolean;
+}
 
-  constructor(
-    prompt: string,
-    negativePrompt: string,
-    enhance: boolean,
-    composition: string,
-    qualityTail: string
+/**
+ * Inspects a PNG sketch payload (3.2):
+ * - Rejects non-PNG, > 4 MB, or side > 2048 with an error.
+ * - Counts ink pixels where alpha > 128 and luminance < 160.
+ * - Flags as blank if inkPixels < 150.
+ */
+export function inspectSketch(base64OrDataUrl: string): SketchInspection {
+  if (!base64OrDataUrl || typeof base64OrDataUrl !== "string") {
+    throw new Error("Invalid sketch payload");
+  }
+
+  const match = base64OrDataUrl.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
+  if (match) {
+    const mime = match[1].toLowerCase().trim();
+    if (mime !== "image/png") {
+      throw new Error("Only PNG sketches are supported");
+    }
+  }
+
+  const rawBase64 = match ? match[2].replace(/\s+/g, "") : base64OrDataUrl.replace(/\s+/g, "");
+  const buffer = Buffer.from(rawBase64, "base64");
+
+  if (buffer.length > 4 * 1024 * 1024) {
+    throw new Error("Sketch exceeds 4 MB limit");
+  }
+
+  if (
+    buffer.length < 8 ||
+    buffer[0] !== 0x89 ||
+    buffer[1] !== 0x50 ||
+    buffer[2] !== 0x4e ||
+    buffer[3] !== 0x47
   ) {
-    super(prompt);
-    this.prompt = prompt;
-    this.negativePrompt = negativePrompt;
-    this.enhance = enhance;
-    this.composition = composition;
-    this.qualityTail = qualityTail;
-  }
-}
-
-export function buildPrompt(
-  rawPrompt: string,
-  options?: {
-    aspect?: "square" | "portrait" | "landscape" | null;
-    styleId?: string;
-    hasSketch?: boolean;
-    negativePrompt?: string;
-  }
-): PromptResult {
-  // First sentence only, max 200 chars, cleaned
-  const trimmed = (rawPrompt || "").trim();
-  const firstSentenceMatch = trimmed.match(/^([^.\n]+)/);
-  const subject = (firstSentenceMatch ? firstSentenceMatch[1] : trimmed).slice(0, 200).trim();
-
-  let composition = "";
-  if (options?.aspect === "portrait") {
-    composition = "full-body vertical composition";
-  } else if (options?.aspect === "landscape") {
-    composition = "wide landscape composition";
+    throw new Error("Not a valid PNG image");
   }
 
-  const qualityTail = "detailed, coherent anatomy, single subject, clean line art to illustration";
+  let png: PNG;
+  try {
+    png = PNG.sync.read(buffer);
+  } catch (err: any) {
+    throw new Error(`Failed to parse PNG sketch: ${err.message}`);
+  }
 
-  const styleSuffix = options?.styleId ? STYLE_PRESETS[options.styleId] || "" : "";
+  if (png.width > 2048 || png.height > 2048) {
+    throw new Error("Sketch dimensions exceed 2048px");
+  }
 
-  const parts = [subject, composition, styleSuffix, qualityTail].filter(Boolean);
-  const fullPrompt = parts.join(", ");
+  let inkPixels = 0;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const idx = (png.width * y + x) << 2;
+      const r = png.data[idx];
+      const g = png.data[idx + 1];
+      const b = png.data[idx + 2];
+      const a = png.data[idx + 3];
 
-  const hasSketch = Boolean(options?.hasSketch);
-  const enhance = !hasSketch;
-  const negativePrompt = options?.negativePrompt || DEFAULT_NEGATIVE_PROMPT;
+      if (a > 128) {
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (luminance < 160) {
+          inkPixels++;
+        }
+      }
+    }
+  }
 
-  return new PromptResult(fullPrompt, negativePrompt, enhance, composition, qualityTail);
+  const isBlank = inkPixels < 150;
+  return { width: png.width, height: png.height, inkPixels, isBlank };
 }
 
-export function mapLiteralToDenoising(literal: number = 0.5): number {
-  const raw = 0.75 - literal * 0.45;
-  const clamped = Math.max(0.25, Math.min(0.8, raw));
-  return Number(clamped.toFixed(4));
-}
-
-export function deriveDimensions(
-  aspect?: "square" | "portrait" | "landscape" | null,
-  bounds?: { width: number; height: number } | null,
-  hasSketch: boolean = true
-): { width: number; height: number } {
-  if (!hasSketch) {
+/**
+ * Derives dimensions from the real PNG (3.3):
+ * - Same aspect ratio as sketch, long edge 1024, both sides snapped to multiple of 64, minimum 512.
+ * - Without a sketch: 1024x1024.
+ */
+export function deriveDimensions(sketch?: { width: number; height: number } | null): {
+  width: number;
+  height: number;
+} {
+  if (!sketch || !sketch.width || !sketch.height) {
     return { width: 1024, height: 1024 };
   }
 
-  let w = 768;
-  let h = 768;
-
-  if (bounds && bounds.width > 0 && bounds.height > 0) {
-    const ratio = bounds.width / bounds.height;
-    if (ratio > 1) {
-      w = 1024;
-      h = Math.round((1024 / ratio) / 64) * 64;
-    } else {
-      h = 1024;
-      w = Math.round((1024 * ratio) / 64) * 64;
-    }
-  } else if (aspect === "portrait") {
-    w = 640;
-    h = 960;
-  } else if (aspect === "landscape") {
-    w = 960;
-    h = 640;
+  const { width, height } = sketch;
+  if (width >= height) {
+    const ratio = height / width;
+    const h = Math.max(512, Math.round((1024 * ratio) / 64) * 64);
+    return { width: 1024, height: h };
   } else {
-    w = 768;
-    h = 768;
+    const ratio = width / height;
+    const w = Math.max(512, Math.round((1024 * ratio) / 64) * 64);
+    return { width: w, height: 1024 };
   }
-
-  w = Math.max(512, Math.min(1024, Math.round(w / 64) * 64));
-  h = Math.max(512, Math.min(1024, Math.round(h / 64) * 64));
-
-  return { width: w, height: h };
 }
 
-export function computeCacheKey(
-  prompt: string,
-  sketchBase64: string,
-  styleId: string = "",
-  seed?: number,
-  backend: string = "default"
-): string {
-  const hash = crypto.createHash("sha256");
-  hash.update(prompt.trim().toLowerCase());
-  hash.update(styleId.trim().toLowerCase());
-  hash.update(String(seed ?? ""));
-  hash.update(backend);
-  if (sketchBase64 && sketchBase64.trim()) {
-    const sketchHash = crypto.createHash("sha256").update(sketchBase64.trim()).digest("hex");
-    hash.update(sketchHash);
-  } else {
-    hash.update("no-sketch");
+/**
+ * Assembles the prompt (3.4):
+ * - Caps user subject at 300 characters.
+ * - Never truncates the assembled prompt; the style phrase arrives complete.
+ */
+export function buildPrompt(rawSubject: string, styleId?: string): string {
+  const subject = (rawSubject || "").trim().slice(0, 300);
+  const styleSuffix = styleId ? STYLE_PRESETS[styleId] || "" : "";
+  if (styleSuffix) {
+    return `${subject}, ${styleSuffix}`;
   }
-  return hash.digest("hex");
+  return subject;
 }
-
-export type CachedResult = {
-  imageUrl: string;
-  provider: string;
-  model: string;
-  sketchGuided: boolean;
-  seed: number;
-};
-
-// In-memory cache for generation results
-export const resultCache = new Map<string, CachedResult>();
 
 export type JobStatus = {
   id: string;
@@ -161,10 +137,15 @@ export type JobStatus = {
   progress: number;
   imageUrl?: string;
   error?: string;
+  errorCode?: string;
+  retryAfter?: number;
   provider?: string;
   model?: string;
-  sketchGuided?: boolean;
-  seed?: number;
+  sketchGuided: boolean;
+  sketchIgnored?: "blank" | null;
+  seed: number;
+  width?: number;
+  height?: number;
   createdAt: number;
 };
 
@@ -196,376 +177,131 @@ export function checkRateLimit(ip: string): boolean {
 
 export function resetRateLimitsForTesting(): void {
   ipRateLimit.clear();
-  resultCache.clear();
   jobs.clear();
 }
 
-async function tryAIHordeImg2Img(
-  prompt: string,
-  rawBase64: string,
-  denoisingStrength: number,
-  width: number,
-  height: number,
-  seed: number,
-  negativePrompt: string,
-  updateProgress?: (p: number) => void
-): Promise<{ imageUrl: string; model: string } | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    const hordePayload = {
-      prompt: `${prompt} ### ${negativePrompt}`,
-      params: {
-        width,
-        height,
-        steps: 15,
-        cfg_scale: 7,
-        n: 1,
-        seed: String(seed),
-        denoising_strength: denoisingStrength,
-        negative_prompt: negativePrompt
-      },
-      source_image: rawBase64,
-      source_processing: "img2img",
-      nsfw: false,
-      censor_nsfw: false
-      // slow_workers must not be set to false for anonymous keys
-    };
-
-    const submitResponse = await fetch(`${HORDE_BASE}/generate/async`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: ANON_KEY
-      },
-      body: JSON.stringify(hordePayload),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    if (!submitResponse.ok) return null;
-    const { id: hordeJobId } = (await submitResponse.json()) as { id: string };
-
-    // Poll up to 3 times (6 seconds total); if wait_time > 45 or queue is large, bail to next backend
-    for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      updateProgress?.(30 + i * 15);
-
-      const statusResponse = await fetch(`${HORDE_BASE}/generate/check/${hordeJobId}`);
-      if (!statusResponse.ok) continue;
-
-      const check = (await statusResponse.json()) as {
-        done: boolean;
-        faulted: boolean;
-        wait_time?: number;
-        queue_position?: number;
-      };
-
-      if (check.faulted || (check.wait_time && check.wait_time > 45)) {
-        return null;
-      }
-
-      if (check.done) {
-        const fullStatusRes = await fetch(`${HORDE_BASE}/generate/status/${hordeJobId}`);
-        if (!fullStatusRes.ok) return null;
-        const fullStatus = (await fullStatusRes.json()) as {
-          generations?: Array<{ img: string; model?: string }>;
-        };
-        const gen = fullStatus.generations?.[0];
-        if (!gen) return null;
-
-        const modelName = gen.model || "AI Horde";
-        let finalImageUrl: string;
-        if (gen.img.startsWith("http://") || gen.img.startsWith("https://")) {
-          finalImageUrl = gen.img;
-        } else {
-          finalImageUrl = await saveBase64Image(`data:image/webp;base64,${gen.img}`);
-        }
-        return { imageUrl: finalImageUrl, model: modelName };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function tryPollinationsImg(
-  prompt: string,
-  publicSketchUrl: string | null,
-  width: number,
-  height: number,
-  seed: number,
-  negativePrompt: string,
-  modelName: string = "klein"
-): Promise<{ imageUrl: string; model: string } | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-
-    const params = new URLSearchParams({
-      width: String(width),
-      height: String(height),
-      seed: String(seed),
-      nologo: "true",
-      negative_prompt: negativePrompt
-    });
-    if (publicSketchUrl) {
-      params.set("image", publicSketchUrl);
-    }
-    if (modelName) {
-      params.set("model", modelName);
-    }
-
-    const encodedPrompt = encodeURIComponent(prompt.slice(0, 200));
-    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?${params.toString()}`;
-
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      },
-      redirect: "follow",
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-
-    if (!response.ok) return null;
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) return null;
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length < 500) return null;
-
-    const usedModel = response.headers.get("x-model-used") || modelName || "sana";
-    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    const savedUrl = await saveBase64Image(base64);
-    return { imageUrl: savedUrl, model: usedModel };
-  } catch {
-    return null;
-  }
-}
-
-async function tryHuggingFaceImg2Img(
-  prompt: string,
-  rawBase64: string,
-  model: string = "black-forest-labs/FLUX.1-Kontext-dev"
-): Promise<{ imageUrl: string; model: string } | null> {
-  if (!env.hfToken) return null;
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-    const response = await fetch(
-      `https://router.huggingface.co/hf-inference/models/${model}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.hfToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          inputs: prompt,
-          parameters: { image: rawBase64 }
-        }),
-        signal: controller.signal
-      }
-    );
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) return null;
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get("content-type") || "image/png";
-    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    const savedUrl = await saveBase64Image(base64);
-    return { imageUrl: savedUrl, model };
-  } catch {
-    return null;
-  }
-}
-
-export async function processGeneration(
+/**
+ * Text backend execution (3.5):
+ * - With a key: GET https://gen.pollinations.ai/image/{prompt} with Bearer key
+ * - Without a key: GET https://image.pollinations.ai/prompt/{prompt}
+ * - On 402/429: sets RATE_LIMITED error with retryAfter
+ */
+export async function executeTextGeneration(
   job: JobStatus,
-  options: {
-    imageBase64?: string;
-    prompt: string;
-    styleId?: string;
-    literal?: number;
-    seed?: number;
-    aspect?: "square" | "portrait" | "landscape";
-    bounds?: { width: number; height: number };
-    allowTextOnly?: boolean;
-  }
+  prompt: string,
+  width: number,
+  height: number,
+  seed: number
 ): Promise<void> {
-  const seed = options.seed ?? Math.floor(Math.random() * 1000000);
-  job.seed = seed;
+  job.status = "processing";
+  job.progress = 30;
 
   try {
-    job.status = "processing";
-    job.progress = 15;
+    const key = env.pollinationsApiKey;
+    let url: string;
+    let headers: Record<string, string> = {};
+    let targetModel = "flux";
 
-    const hasSketch = Boolean(options.imageBase64 && options.imageBase64.length > 50);
-    const builtPrompt = buildPrompt(options.prompt, {
-      aspect: options.aspect,
-      styleId: options.styleId,
-      hasSketch
-    });
+    let response: any = null;
 
-    const dimensions = deriveDimensions(options.aspect, options.bounds, hasSketch);
+    if (key) {
+      targetModel = process.env.POLLINATIONS_TEXT_MODEL || "flux";
+      const query = new URLSearchParams({
+        model: targetModel,
+        seed: String(seed),
+        width: String(width),
+        height: String(height),
+        nologo: "true"
+      });
+      url = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?${query.toString()}`;
+      headers = { Authorization: `Bearer ${key}` };
 
-    let publicSketchUrl: string | null = null;
-    let rawSketchBase64: string | null = null;
-
-    if (hasSketch && options.imageBase64) {
-      job.progress = 25;
-      publicSketchUrl = await saveBase64Image(options.imageBase64);
-      const match = options.imageBase64.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s);
-      rawSketchBase64 = match ? match[2].replace(/\s+/g, "") : options.imageBase64;
-    }
-
-    let winner: { imageUrl: string; provider: string; model: string; sketchGuided: boolean } | null = null;
-
-    // 1. If sketch present, try AI Horde img2img first
-    if (hasSketch && rawSketchBase64) {
-      job.progress = 35;
-      const denoising = mapLiteralToDenoising(options.literal ?? 0.5);
-      const hordeRes = await tryAIHordeImg2Img(
-        builtPrompt.prompt,
-        rawSketchBase64,
-        denoising,
-        dimensions.width,
-        dimensions.height,
-        seed,
-        builtPrompt.negativePrompt,
-        (p) => {
-          job.progress = Math.max(job.progress, p);
+      try {
+        const res = await fetch(url, {
+          headers,
+          signal: AbortSignal.timeout(120000)
+        });
+        if (res.ok) {
+          response = res;
+        } else if (res.status === 401 || res.status === 402) {
+          // If key is invalid or wallet is empty, fall back to anonymous endpoint
+          response = null;
+        } else {
+          response = res;
         }
-      );
-      if (hordeRes) {
-        winner = {
-          imageUrl: hordeRes.imageUrl,
-          provider: "AI Horde",
-          model: hordeRes.model,
-          sketchGuided: true
-        };
+      } catch {
+        response = null;
       }
     }
 
-    // 2. Try Hugging Face if HF_TOKEN is configured and sketch is present
-    if (!winner && hasSketch && rawSketchBase64 && env.hfToken) {
-      job.progress = 50;
-      const hfRes = await tryHuggingFaceImg2Img(builtPrompt.prompt, rawSketchBase64);
-      if (hfRes) {
-        winner = {
-          imageUrl: hfRes.imageUrl,
-          provider: "Hugging Face",
-          model: hfRes.model,
-          sketchGuided: true
-        };
-      }
+    if (!response) {
+      targetModel = "sana";
+      const query = new URLSearchParams({
+        seed: String(seed),
+        width: String(width),
+        height: String(height),
+        nologo: "true"
+      });
+      url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${query.toString()}`;
+      headers = { "User-Agent": "Mozilla/5.0 sketch-probe" };
+
+      response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(120000)
+      });
     }
 
-    // 3. Try Pollinations with image=<blob url> (probe proved klein and default sana accept image=)
-    if (!winner && hasSketch && publicSketchUrl) {
-      job.progress = 60;
-      const pollRes = await tryPollinationsImg(
-        builtPrompt.prompt,
-        publicSketchUrl,
-        dimensions.width,
-        dimensions.height,
-        seed,
-        builtPrompt.negativePrompt,
-        "klein"
-      );
-      if (pollRes) {
-        winner = {
-          imageUrl: pollRes.imageUrl,
-          provider: "Pollinations",
-          model: pollRes.model,
-          sketchGuided: true
-        };
-      } else {
-        // Fallback to default sana model
-        const pollSana = await tryPollinationsImg(
-          builtPrompt.prompt,
-          publicSketchUrl,
-          dimensions.width,
-          dimensions.height,
-          seed,
-          builtPrompt.negativePrompt,
-          ""
-        );
-        if (pollSana) {
-          winner = {
-            imageUrl: pollSana.imageUrl,
-            provider: "Pollinations",
-            model: pollSana.model,
-            sketchGuided: true
-          };
-        }
-      }
+    if (response.status === 402 || response.status === 429) {
+      const retryHeader = response.headers.get("retry-after");
+      const retryAfter = retryHeader ? Number(retryHeader) || 45 : 45;
+      job.status = "failed";
+      job.progress = 0;
+      job.errorCode = "RATE_LIMITED";
+      job.retryAfter = retryAfter;
+      job.error = `The free image service allows one picture every 45 seconds for everyone using this app. Try again in ${retryAfter} s.`;
+      return;
     }
 
-    // 4. Text-only fallback (ONLY if sketch was empty OR caller explicitly allowed text-only fallback)
-    if (!winner && (!hasSketch || options.allowTextOnly)) {
-      job.progress = 75;
-      const textOnlyRes = await tryPollinationsImg(
-        builtPrompt.prompt,
-        null,
-        dimensions.width,
-        dimensions.height,
-        seed,
-        builtPrompt.negativePrompt,
-        ""
-      );
-      if (textOnlyRes) {
-        winner = {
-          imageUrl: textOnlyRes.imageUrl,
-          provider: "Pollinations",
-          model: textOnlyRes.model,
-          sketchGuided: false
-        };
-      }
-    }
-
-    // Honest failure: do NOT synthesize SVG poster!
-    if (!winner) {
+    if (!response.ok) {
       job.status = "failed";
       job.progress = 0;
       job.error = "Image service unavailable, try again.";
       return;
     }
 
-    // Save in cache
-    const cacheKey = computeCacheKey(
-      options.prompt,
-      options.imageBase64 || "",
-      options.styleId || "",
-      seed,
-      winner.provider
-    );
-    resultCache.set(cacheKey, {
-      imageUrl: winner.imageUrl,
-      provider: winner.provider,
-      model: winner.model,
-      sketchGuided: winner.sketchGuided,
-      seed
-    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      job.status = "failed";
+      job.progress = 0;
+      job.error = "Image service unavailable, try again.";
+      return;
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length < 500) {
+      job.status = "failed";
+      job.progress = 0;
+      job.error = "Image service unavailable, try again.";
+      return;
+    }
+
+    job.progress = 85;
+
+    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
+    const savedUrl = await saveBase64Image(base64);
+
+    const usedModel = response.headers.get("x-model-used") || targetModel;
 
     job.status = "completed";
     job.progress = 100;
-    job.imageUrl = winner.imageUrl;
-    job.provider = winner.provider;
-    job.model = winner.model;
-    job.sketchGuided = winner.sketchGuided;
-    job.seed = seed;
-  } catch (err) {
+    job.imageUrl = savedUrl;
+    job.provider = "Pollinations";
+    job.model = usedModel;
+    job.sketchGuided = false;
+  } catch {
     job.status = "failed";
     job.progress = 0;
-    job.error = err instanceof Error ? err.message : "Image generation failed.";
+    job.error = "Image service unavailable, try again.";
   }
 }
 
@@ -578,80 +314,89 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
 
   const {
     imageBase64,
-    prompt,
+    prompt: rawPrompt,
     styleId,
-    literal,
     seed: incomingSeed,
-    aspect,
-    bounds,
     allowTextOnly
   } = req.body as {
     imageBase64?: string;
     prompt: string;
     styleId?: string;
-    literal?: number;
     seed?: number;
-    aspect?: "square" | "portrait" | "landscape";
-    bounds?: { width: number; height: number };
     allowTextOnly?: boolean;
   };
 
-  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+  if (!rawPrompt || typeof rawPrompt !== "string" || !rawPrompt.trim()) {
     res.status(400).json({ error: "prompt is required." });
     return;
   }
 
-  const seed = typeof incomingSeed === "number" ? incomingSeed : Math.floor(Math.random() * 1000000);
+  let sketchInspection: SketchInspection | null = null;
+  let sketchIgnored: "blank" | null = null;
 
-  // Check Cache
-  const cacheKey = computeCacheKey(
-    prompt,
-    imageBase64 || "",
-    styleId || "",
-    seed,
-    "default"
-  );
-  if (resultCache.has(cacheKey)) {
-    const cached = resultCache.get(cacheKey)!;
-    res.json({
-      imageUrl: cached.imageUrl,
-      cached: true,
-      provider: cached.provider,
-      model: cached.model,
-      sketchGuided: cached.sketchGuided,
-      seed: cached.seed
-    });
-    return;
+  if (imageBase64 && typeof imageBase64 === "string" && imageBase64.trim().length > 0) {
+    try {
+      sketchInspection = inspectSketch(imageBase64);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || "Invalid sketch image" });
+      return;
+    }
+
+    if (sketchInspection.isBlank) {
+      sketchIgnored = "blank";
+    }
   }
 
-  // Create Job
+  const hasVisibleSketch = Boolean(sketchInspection && !sketchInspection.isBlank);
+
+  // In Outcome B: no sketch backend is available.
+  // visible sketch + no sketch backend -> allowTextOnly: true uses text backend;
+  // otherwise answer HTTP 409 { code: "SKETCH_UNAVAILABLE" } without calling anything upstream (3.5)
+  if (hasVisibleSketch) {
+    if (!allowTextOnly) {
+      res.status(409).json({
+        error: "Sketch-guided generation is not available",
+        code: "SKETCH_UNAVAILABLE"
+      });
+      return;
+    }
+  }
+
+  const seed = typeof incomingSeed === "number" ? incomingSeed : Math.floor(Math.random() * 1000000);
   const jobId = crypto.randomUUID();
   const job: JobStatus = {
     id: jobId,
     status: "pending",
-    progress: 5,
+    progress: 10,
+    sketchGuided: false,
+    sketchIgnored,
     seed,
     createdAt: Date.now()
   };
   jobs.set(jobId, job);
 
-  // Process asynchronously
-  void processGeneration(job, {
-    imageBase64,
-    prompt,
-    styleId,
-    literal,
-    seed,
-    aspect,
-    bounds,
-    allowTextOnly
-  });
+  const dimensions = deriveDimensions(hasVisibleSketch ? sketchInspection : null);
+  job.width = dimensions.width;
+  job.height = dimensions.height;
+
+  const prompt = buildPrompt(rawPrompt, styleId);
+
+  // Execute text generation asynchronously
+  void executeTextGeneration(job, prompt, dimensions.width, dimensions.height, seed);
 
   res.status(202).json({ jobId, status: "pending", seed });
 }
 
 aiRouter.post("/generate", handleGenerateRequest);
 aiRouter.post("/enhance", handleGenerateRequest);
+
+// 3.6 Capabilities endpoint: in Outcome B, sketch is false, sketchModel is null
+aiRouter.get("/capabilities", (_req: Request, res: Response) => {
+  res.json({
+    sketch: false,
+    sketchModel: null
+  });
+});
 
 aiRouter.get("/job/:id", (req: Request, res: Response) => {
   const jobId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -668,9 +413,14 @@ aiRouter.get("/job/:id", (req: Request, res: Response) => {
     progress: job.progress,
     imageUrl: job.imageUrl,
     error: job.error,
+    errorCode: job.errorCode,
+    retryAfter: job.retryAfter,
     provider: job.provider,
     model: job.model,
     sketchGuided: job.sketchGuided,
-    seed: job.seed
+    sketchIgnored: job.sketchIgnored,
+    seed: job.seed,
+    width: job.width,
+    height: job.height
   });
 });

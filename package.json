@@ -15,7 +15,8 @@
     "test": "npm run test --workspace server",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up",
-    "test:collab": "npx tsx --tsconfig tsconfig.test.json --test tests/*.test.ts"
+    "test:collab": "npx tsx --tsconfig tsconfig.test.json --test tests/*.test.ts",
+    "smoke:image": "npm run build --workspace server && node server/scripts/smoke-image.mjs"
   },
   "dependencies": {
     "@huggingface/inference": "^4.13.26"
