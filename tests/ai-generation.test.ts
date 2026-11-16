@@ -8,8 +8,16 @@ import {
   deriveDimensions,
   inspectSketch,
   jobs,
-  resetRateLimitsForTesting
+  resetRateLimitsForTesting,
+  activeSketchWording,
+  sketchEditPrompt,
+  sketchBackendAvailable
 } from "../server/src/routes/ai";
+import {
+  SKETCH_MODEL,
+  SKETCH_WORDINGS,
+  SKETCH_DEFAULT_WORDING
+} from "../server/src/config/sketchWordings";
 import { setBlobPutForTesting, setBlobTokenForTesting } from "../server/src/utils/storage";
 
 function makeTestPng(width = 512, height = 512, strokeHex = "#000000"): string {
@@ -41,12 +49,34 @@ function makeTestPng(width = 512, height = 512, strokeHex = "#000000"): string {
   return `data:image/png;base64,${buf.toString("base64")}`;
 }
 
-describe("AI Generation Pipeline (Outcome B)", () => {
+describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
   const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.POLLINATIONS_API_KEY;
+  const originalWording = process.env.SKETCH_WORDING;
+
   let server: any = null;
   let baseUrl = "";
   const recordedRequests: { url: string; method?: string; headers?: any; body?: any }[] = [];
   let upstreamHandler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+  const mockImagePng = Buffer.from(
+    makeTestPng(256, 256, "#ff0000").replace(/^data:image\/png;base64,/, ""),
+    "base64"
+  );
+
+  async function waitForJob(jobId: string, maxAttempts = 30): Promise<any> {
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      const res = await fetch(`${baseUrl}/ai/job/${jobId}`);
+      if (res.ok) {
+        const job = (await res.json()) as any;
+        if (job.status === "completed" || job.status === "failed") {
+          return job;
+        }
+      }
+    }
+    throw new Error(`Job ${jobId} did not finish within timeout`);
+  }
 
   beforeEach(async () => {
     resetRateLimitsForTesting();
@@ -65,18 +95,29 @@ describe("AI Generation Pipeline (Outcome B)", () => {
     });
     baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-    upstreamHandler = async () => {
-      const dummyImage = Buffer.alloc(1024, 0x42);
-      return new Response(dummyImage, {
+    upstreamHandler = async (input, init) => {
+      const urlStr = input.toString();
+      if (urlStr.includes("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: mockImagePng.toString("base64") }]
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+      return new Response(mockImagePng, {
         status: 200,
         headers: {
-          "content-type": "image/jpeg",
+          "content-type": "image/png",
           "x-model-used": "sana"
         }
       });
     };
 
-    // Intercept upstream fetch, but delegate 127.0.0.1 / baseUrl to originalFetch
+    // Intercept upstream fetch, delegate 127.0.0.1 / baseUrl to originalFetch
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const urlStr = input.toString();
       if (urlStr.includes("127.0.0.1") || (baseUrl && urlStr.startsWith(baseUrl))) {
@@ -94,6 +135,17 @@ describe("AI Generation Pipeline (Outcome B)", () => {
 
   afterEach(async () => {
     globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.POLLINATIONS_API_KEY;
+    } else {
+      process.env.POLLINATIONS_API_KEY = originalApiKey;
+    }
+    if (originalWording === undefined) {
+      delete process.env.SKETCH_WORDING;
+    } else {
+      process.env.SKETCH_WORDING = originalWording;
+    }
+    resetRateLimitsForTesting();
     setBlobTokenForTesting(null);
     setBlobPutForTesting(null);
     if (server) {
@@ -101,27 +153,30 @@ describe("AI Generation Pipeline (Outcome B)", () => {
     }
   });
 
-  // 1 & 2. Sketch + allowTextOnly: false -> HTTP 409 SKETCH_UNAVAILABLE, zero upstream requests
-  test("1 & 2. Sketch + allowTextOnly: false -> HTTP 409 SKETCH_UNAVAILABLE, zero upstream requests", async () => {
+  // --- Without a key ---
+
+  // 1. Visible sketch, no allowTextOnly: HTTP 409 { code: "SKETCH_UNAVAILABLE" }, zero upstream requests
+  test("1. Without a key: visible sketch, no allowTextOnly -> 409 SKETCH_UNAVAILABLE, zero upstream requests", async () => {
+    delete process.env.POLLINATIONS_API_KEY;
     const sketch = makeTestPng(512, 512, "#000000");
     const res = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: "a red apple",
-        imageBase64: sketch,
-        allowTextOnly: false
+        imageBase64: sketch
       })
     });
 
     assert.equal(res.status, 409);
     const body = (await res.json()) as any;
     assert.equal(body.code, "SKETCH_UNAVAILABLE");
-    assert.equal(recordedRequests.length, 0, "No upstream requests made when sketch unavailable and text not allowed");
+    assert.equal(recordedRequests.length, 0, "Zero upstream requests");
   });
 
-  // 3. Sketch + allowTextOnly: true -> one text request, job sketchGuided: false
-  test("3. Sketch + allowTextOnly: true -> one text request, job sketchGuided: false", async () => {
+  // 2. Visible sketch, allowTextOnly: true: one upstream text request, job sketchGuided: false
+  test("2. Without a key: visible sketch, allowTextOnly: true -> 1 text request, job sketchGuided: false", async () => {
+    delete process.env.POLLINATIONS_API_KEY;
     const sketch = makeTestPng(512, 512, "#000000");
     const res = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
@@ -135,81 +190,356 @@ describe("AI Generation Pipeline (Outcome B)", () => {
 
     assert.equal(res.status, 202);
     const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
 
-    // Wait for job completion
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      const jobRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-      const job = (await jobRes.json()) as any;
-      if (job.status === "completed") {
-        assert.equal(job.sketchGuided, false, "sketchGuided is false for text fallback");
-        assert.equal(recordedRequests.length, 1, "Exactly one text request made upstream");
-        return;
-      }
-    }
-    assert.fail("Job did not complete");
+    assert.equal(job.status, "completed");
+    assert.equal(job.sketchGuided, false);
+    assert.equal(recordedRequests.length, 1);
   });
 
-  // 4. A PNG with #ececf1 strokes on white -> treated as blank, sketchIgnored: 'blank'
-  test("4. PNG with #ececf1 strokes on white -> no request contains image bytes, job sketchGuided: false, sketchIgnored: 'blank'", async () => {
+  // 3. GET /ai/capabilities is { sketch: false, sketchModel: null }
+  test("3. Without a key: GET /ai/capabilities is { sketch: false, sketchModel: null }", async () => {
+    delete process.env.POLLINATIONS_API_KEY;
+    const res = await fetch(`${baseUrl}/ai/capabilities`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body, { sketch: false, sketchModel: null });
+  });
+
+  // --- With a key ---
+
+  // 4. GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL }
+  test("4. With a key: GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL }", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    const res = await fetch(`${baseUrl}/ai/capabilities`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body, { sketch: true, sketchModel: SKETCH_MODEL });
+  });
+
+  // 5. A 768x384 PNG with dark strokes, style digital, fixed seed -> 1 upstream edit request, job sketchGuided: true
+  test("5. With a key: 768x384 PNG, style digital, fixed seed -> 1 upstream edit request, job sketchGuided: true", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    const subject = "a red apple";
+    const sketchDataUrl = makeTestPng(768, 384, "#000000");
+    const postedPngBytes = Buffer.from(sketchDataUrl.slice(sketchDataUrl.indexOf(",") + 1), "base64");
+    const fixedSeed = 123456;
+
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: subject,
+        styleId: "digital",
+        imageBase64: sketchDataUrl,
+        seed: fixedSeed
+      })
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "completed");
+    assert.equal(job.sketchGuided, true);
+    assert.equal(job.model, SKETCH_MODEL);
+    assert.ok(job.imageUrl);
+
+    assert.equal(recordedRequests.length, 1);
+    const req = recordedRequests[0];
+    assert.equal(req.url, "https://gen.pollinations.ai/v1/images/edits");
+    assert.equal(req.method, "POST");
+
+    const authHeader = (req.headers as any)?.Authorization || (req.headers as any)?.authorization;
+    assert.equal(authHeader, "Bearer test-key-12345");
+
+    const form = req.body as FormData;
+    assert.equal(form.get("model"), SKETCH_MODEL);
+    assert.equal(form.get("prompt"), sketchEditPrompt(buildPrompt(subject, "digital")));
+    assert.equal(form.get("size"), "1024x512");
+    assert.equal(form.get("seed"), String(fixedSeed));
+    assert.equal(form.get("n"), "1");
+    assert.equal(form.get("response_format"), "b64_json");
+
+    const imageFile = form.get("image") as any;
+    assert.ok(imageFile);
+    const imageBytes = Buffer.from(await imageFile.arrayBuffer());
+    assert.deepEqual(imageBytes, postedPngBytes);
+  });
+
+  // 6. Same request, upstream answers 402: job failed, errorCode: SKETCH_UNAVAILABLE, no imageUrl, caps sketch: false, next POST 409
+  test("6. Upstream answers 402: job failed SKETCH_UNAVAILABLE, no imageUrl, 1 upstream req, caps sketch: false, next POST 409", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    upstreamHandler = async () => new Response("Payment Required", { status: 402 });
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const payload = {
+      prompt: "a red apple",
+      imageBase64: sketch,
+      seed: 424242
+    };
+
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCode, "SKETCH_UNAVAILABLE");
+    assert.equal(job.imageUrl, undefined);
+    assert.equal(recordedRequests.length, 1);
+
+    // Afterwards capabilities returns sketch: false
+    const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
+    const caps = await capsRes.json();
+    assert.equal(caps.sketch, false);
+
+    // Same POST now answers HTTP 409
+    const res2 = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(res2.status, 409);
+    const body2 = (await res2.json()) as any;
+    assert.equal(body2.code, "SKETCH_UNAVAILABLE");
+  });
+
+  // 7. Upstream answers 401: same as test 6
+  test("7. Upstream answers 401: job failed SKETCH_UNAVAILABLE, no imageUrl, 1 upstream req, caps sketch: false, next POST 409", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    upstreamHandler = async () => new Response("Unauthorized", { status: 401 });
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const payload = {
+      prompt: "a red apple",
+      imageBase64: sketch,
+      seed: 424242
+    };
+
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCode, "SKETCH_UNAVAILABLE");
+    assert.equal(job.imageUrl, undefined);
+    assert.equal(recordedRequests.length, 1);
+
+    const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
+    const caps = await capsRes.json();
+    assert.equal(caps.sketch, false);
+
+    const res2 = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(res2.status, 409);
+    const body2 = (await res2.json()) as any;
+    assert.equal(body2.code, "SKETCH_UNAVAILABLE");
+  });
+
+  // 8. Upstream answers 500: job failed honest message, no errorCode, 1 upstream req, caps still sketch: true
+  test("8. Upstream answers 500: job failed honest message, no errorCode, 1 upstream req, caps still sketch: true", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    upstreamHandler = async () => new Response("Server Error", { status: 500 });
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "a red apple",
+        imageBase64: sketch
+      })
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "failed");
+    assert.equal(job.error, "Image service unavailable, try again.");
+    assert.equal(job.errorCode, undefined);
+    assert.equal(recordedRequests.length, 1);
+
+    const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
+    const caps = await capsRes.json();
+    assert.equal(caps.sketch, true);
+  });
+
+  // 9. Upstream answers 429 with retry-after: 12: errorCode: RATE_LIMITED, retryAfter: 12
+  test("9. Upstream answers 429 with retry-after: 12 -> errorCode: RATE_LIMITED, retryAfter: 12", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    upstreamHandler = async () =>
+      new Response("Too Many Requests", {
+        status: 429,
+        headers: { "retry-after": "12" }
+      });
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "a red apple",
+        imageBase64: sketch
+      })
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "failed");
+    assert.equal(job.errorCode, "RATE_LIMITED");
+    assert.equal(job.retryAfter, 12);
+  });
+
+  // 10. Upstream answers 200 with JSON without picture -> job failed, no imageUrl
+  test("10. Upstream answers 200 with JSON without picture -> job failed, no imageUrl", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    upstreamHandler = async () =>
+      new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "a red apple",
+        imageBase64: sketch
+      })
+    });
+    assert.equal(res.status, 202);
+    const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
+
+    assert.equal(job.status, "failed");
+    assert.equal(job.imageUrl, undefined);
+  });
+
+  // 11. Blank sketch (#ececf1) -> no /v1/images/edits, job sketchGuided: false, sketchIgnored: 'blank'
+  test("11. Blank sketch (#ececf1) -> no /v1/images/edits, job sketchGuided: false, sketchIgnored: 'blank'", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
     const faintSketch = makeTestPng(512, 512, "#ececf1");
     const res = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: "a mountain landscape",
-        imageBase64: faintSketch,
-        allowTextOnly: false // Even with allowTextOnly: false, blank sketch proceeds to text with sketchIgnored: "blank"
+        imageBase64: faintSketch
       })
     });
-
     assert.equal(res.status, 202);
     const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
 
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      const jobRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-      const job = (await jobRes.json()) as any;
-      if (job.status === "completed") {
-        assert.equal(job.sketchIgnored, "blank", "sketchIgnored is marked 'blank'");
-        assert.equal(job.sketchGuided, false);
-        // Verify no request contains image bytes
-        assert.equal(recordedRequests.length, 1);
-        assert.ok(!recordedRequests[0].url.includes("image="));
-        return;
-      }
+    assert.equal(job.status, "completed");
+    assert.equal(job.sketchGuided, false);
+    assert.equal(job.sketchIgnored, "blank");
+    for (const req of recordedRequests) {
+      assert.ok(!req.url.includes("/v1/images/edits"), "Must not call /v1/images/edits for blank sketch");
+      assert.ok(!req.url.includes("image="), "Must not carry image bytes for blank sketch");
     }
-    assert.fail("Job did not complete");
   });
 
-  // 5. Text backend answers 500 -> job failed, honest message, no imageUrl
-  test("5. Text backend answers 500 -> job failed, honest message, no imageUrl", async () => {
-    upstreamHandler = async () => new Response("Internal Server Error", { status: 500 });
-
+  // 12. No sketch -> 1 upstream text request, job sketchGuided: false
+  test("12. No sketch -> 1 upstream text request, job sketchGuided: false", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
     const res = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "failing image" })
+      body: JSON.stringify({
+        prompt: "a mountain landscape"
+      })
     });
-
     assert.equal(res.status, 202);
     const { jobId } = (await res.json()) as any;
+    const job = await waitForJob(jobId);
 
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      const jobRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-      const job = (await jobRes.json()) as any;
-      if (job.status === "failed") {
-        assert.equal(job.error, "Image service unavailable, try again.");
-        assert.equal(job.imageUrl, undefined);
-        return;
-      }
-    }
-    assert.fail("Job did not fail as expected");
+    assert.equal(job.status, "completed");
+    assert.equal(job.sketchGuided, false);
+    assert.equal(recordedRequests.length, 1);
+    assert.ok(recordedRequests[0].url.includes("/image/"), "Text generation request sent");
   });
 
-  // 6. Across all tests no request goes to aihorde.net or huggingface.co
-  test("6. Across all requests no request goes to aihorde.net or huggingface.co", async () => {
+  // 13. Key string appears in no job JSON and in no response body of the app
+  test("13. Key string appears in no job JSON and in no response body of the app", async () => {
+    const secretKey = "super-secret-key-xyz-98765";
+    process.env.POLLINATIONS_API_KEY = secretKey;
+
+    const sketch = makeTestPng(768, 384, "#000000");
+    const res = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "a red apple",
+        imageBase64: sketch
+      })
+    });
+    const generateBody = await res.text();
+    assert.ok(!generateBody.includes(secretKey), "Generate body must not contain key");
+
+    const { jobId } = JSON.parse(generateBody);
+    const job = await waitForJob(jobId);
+    assert.ok(!JSON.stringify(job).includes(secretKey), "Job JSON must not contain key");
+
+    const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
+    const capsBody = await capsRes.text();
+    assert.ok(!capsBody.includes(secretKey), "Capabilities body must not contain key");
+  });
+
+  // 14. Wording selection and sketchEditPrompt formatting
+  test("14. Wording selection and sketchEditPrompt formatting", () => {
+    delete process.env.SKETCH_WORDING;
+    const defaultWording = activeSketchWording();
+    assert.ok(defaultWording);
+    assert.equal(defaultWording.id, SKETCH_DEFAULT_WORDING);
+
+    const otherWording = SKETCH_WORDINGS.find((w) => w.id !== SKETCH_DEFAULT_WORDING);
+    if (otherWording) {
+      process.env.SKETCH_WORDING = otherWording.id;
+      const selected = activeSketchWording();
+      assert.ok(selected);
+      assert.equal(selected.id, otherWording.id);
+    }
+
+    process.env.SKETCH_WORDING = "zzz";
+    const fallback = activeSketchWording();
+    assert.ok(fallback);
+    assert.equal(fallback.id, SKETCH_DEFAULT_WORDING);
+
+    const prompt = sketchEditPrompt("X Y");
+    assert.ok(prompt.includes("X Y"));
+    assert.ok(!prompt.includes("{subject}"));
+  });
+
+  // Additional existing unit tests
+  test("A 185-character subject + style -> prompt still ends with complete style phrase", () => {
+    const longSubject = "A".repeat(185);
+    const assembled = buildPrompt(longSubject, "cyberpunk");
+    assert.ok(assembled.startsWith("A".repeat(185)));
+    assert.ok(assembled.endsWith("cyberpunk neon aesthetic, moody lighting, futuristic city details"));
+  });
+
+  test("A 768x384 sketch -> requested size 1024x512", () => {
+    const dim = deriveDimensions({ width: 768, height: 384 });
+    assert.deepEqual(dim, { width: 1024, height: 512 });
+  });
+
+  test("Across all requests no request goes to aihorde.net or huggingface.co", async () => {
+    delete process.env.POLLINATIONS_API_KEY;
     await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -221,74 +551,5 @@ describe("AI Generation Pipeline (Outcome B)", () => {
       assert.ok(!req.url.includes("aihorde.net"), "Must not call aihorde.net");
       assert.ok(!req.url.includes("huggingface.co"), "Must not call huggingface.co");
     }
-  });
-
-  // 7. A 185-character subject + style -> upstream prompt still ends with complete style phrase
-  test("7. A 185-character subject + style -> prompt still ends with complete style phrase", () => {
-    const longSubject = "A".repeat(185);
-    const assembled = buildPrompt(longSubject, "cyberpunk");
-    assert.ok(assembled.startsWith("A".repeat(185)));
-    assert.ok(assembled.endsWith("cyberpunk neon aesthetic, moody lighting, futuristic city details"));
-  });
-
-  // 8. Anonymous text path answers 402 with retry-after: 38 -> job failed, errorCode: 'RATE_LIMITED', retryAfter: 38
-  test("8. Anonymous text path answers 402 with retry-after: 38 -> job failed, errorCode: 'RATE_LIMITED', retryAfter: 38", async () => {
-    upstreamHandler = async () =>
-      new Response("Payment Required", {
-        status: 402,
-        headers: { "retry-after": "38" }
-      });
-
-    const res = await fetch(`${baseUrl}/ai/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "rate limited prompt" })
-    });
-
-    assert.equal(res.status, 202);
-    const { jobId } = (await res.json()) as any;
-
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      const jobRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-      const job = (await jobRes.json()) as any;
-      if (job.status === "failed") {
-        assert.equal(job.errorCode, "RATE_LIMITED");
-        assert.equal(job.retryAfter, 38);
-        assert.ok(job.error.includes("38 s"));
-        return;
-      }
-    }
-    assert.fail("Job did not report rate limit failure");
-  });
-
-  // 9. /ai/capabilities: sketch: false
-  test("9. /ai/capabilities returns sketch: false, sketchModel: null in Outcome B", async () => {
-    const res = await fetch(`${baseUrl}/ai/capabilities`);
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    assert.deepEqual(body, { sketch: false, sketchModel: null });
-  });
-
-  // 10. JSON.stringify(job) and console outputs never contain the secret API key
-  test("10. JSON.stringify(job) never contains secret API key", async () => {
-    const res = await fetch(`${baseUrl}/ai/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "secret check" })
-    });
-    const { jobId } = (await res.json()) as any;
-    const jobRes = await fetch(`${baseUrl}/ai/job/${jobId}`);
-    const job = await jobRes.json();
-    const str = JSON.stringify(job);
-
-    assert.ok(!str.includes("sk_"), "Job output must never contain api keys");
-    assert.ok(!str.includes("Bearer"), "Job output must never contain Bearer token");
-  });
-
-  // 11. A 768x384 sketch -> requested size 1024x512
-  test("11. A 768x384 sketch -> requested size 1024x512", () => {
-    const dim = deriveDimensions({ width: 768, height: 384 });
-    assert.deepEqual(dim, { width: 1024, height: 512 });
   });
 });

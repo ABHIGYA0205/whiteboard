@@ -67,6 +67,9 @@ function validateEnv() {
     get pollinationsApiKey(): string {
       return process.env.POLLINATIONS_API_KEY?.trim() || "";
     },
+    get sketchWording(): string {
+      return process.env.SKETCH_WORDING?.trim() || "";
+    },
     clientOrigin: configuredOrigins[0] || "http://localhost:3000",
     clientOrigins: configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins,
     get boardSecret(): string {

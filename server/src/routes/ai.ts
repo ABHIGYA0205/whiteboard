@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { PNG } from "pngjs";
 import { env } from "../utils/env";
 import { saveBase64Image } from "../utils/storage";
+import { SKETCH_MODEL, SKETCH_WORDINGS, SKETCH_DEFAULT_WORDING, type SketchWording } from "../config/sketchWordings";
 
 export const aiRouter = Router();
 
@@ -21,6 +22,7 @@ export interface SketchInspection {
   height: number;
   inkPixels: number;
   isBlank: boolean;
+  buffer: Buffer;
 }
 
 /**
@@ -89,7 +91,7 @@ export function inspectSketch(base64OrDataUrl: string): SketchInspection {
   }
 
   const isBlank = inkPixels < 150;
-  return { width: png.width, height: png.height, inkPixels, isBlank };
+  return { width: png.width, height: png.height, inkPixels, isBlank, buffer };
 }
 
 /**
@@ -178,6 +180,107 @@ export function checkRateLimit(ip: string): boolean {
 export function resetRateLimitsForTesting(): void {
   ipRateLimit.clear();
   jobs.clear();
+  sketchDownUntil = 0;
+}
+
+const GEN_BASE = process.env.POLLINATIONS_GEN_BASE || "https://gen.pollinations.ai";
+const LEGACY_BASE = process.env.POLLINATIONS_LEGACY_BASE || "https://image.pollinations.ai";
+let sketchDownUntil = 0;
+
+/** The measured wording in use: SKETCH_WORDING if it names a listed wording, else the measured default. */
+export function activeSketchWording(): SketchWording | null {
+  return (
+    SKETCH_WORDINGS.find((w) => w.id === env.sketchWording) ||
+    SKETCH_WORDINGS.find((w) => w.id === SKETCH_DEFAULT_WORDING) ||
+    null
+  );
+}
+
+export function sketchEditPrompt(subject: string): string {
+  const wording = activeSketchWording();
+  if (!wording) throw new Error("no measured sketch wording");
+  return wording.template.split("{subject}").join(subject);
+}
+
+export function sketchBackendAvailable(): boolean {
+  return Boolean(env.pollinationsApiKey) && activeSketchWording() !== null && Date.now() >= sketchDownUntil;
+}
+
+function imageMime(bytes: Buffer): string | null {
+  if (bytes.length > 12 && bytes[0] === 0x89 && bytes[1] === 0x50) return "image/png";
+  if (bytes.length > 12 && bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  if (bytes.length > 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+/** Sketch backend: FLUX.2 klein through the Pollinations edit endpoint. Never falls back to text. */
+export async function executeSketchGeneration(
+  job: JobStatus,
+  subject: string,
+  sketchPng: Buffer,
+  width: number,
+  height: number,
+  seed: number
+): Promise<void> {
+  job.status = "processing";
+  job.progress = 30;
+  const fail = (error: string, errorCode?: string, retryAfter?: number) => {
+    job.status = "failed";
+    job.progress = 0;
+    job.error = error;
+    job.errorCode = errorCode;
+    job.retryAfter = retryAfter;
+  };
+  try {
+    const form = new FormData();
+    form.append("model", SKETCH_MODEL);
+    form.append("prompt", sketchEditPrompt(subject));
+    form.append("image", new Blob([new Uint8Array(sketchPng)], { type: "image/png" }), "sketch.png");
+    form.append("size", `${width}x${height}`);
+    form.append("seed", String(seed));
+    form.append("n", "1");
+    form.append("response_format", "b64_json");
+    const response = await fetch(`${GEN_BASE}/v1/images/edits`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.pollinationsApiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(150000)
+    });
+    if (response.status === 401 || response.status === 402) {
+      sketchDownUntil = Date.now() + 10 * 60 * 1000;
+      fail("Sketch-guided generation is unavailable right now. You can still generate from your text.", "SKETCH_UNAVAILABLE");
+      return;
+    }
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get("retry-after")) || 30;
+      fail(`The image service is busy. Try again in ${retryAfter} s.`, "RATE_LIMITED", retryAfter);
+      return;
+    }
+    if (!response.ok) {
+      fail("Image service unavailable, try again.");
+      return;
+    }
+    const json: any = await response.json();
+    const item = json?.data?.[0] || {};
+    let bytes: Buffer | null = null;
+    if (typeof item.b64_json === "string") bytes = Buffer.from(item.b64_json, "base64");
+    else if (typeof item.url === "string") bytes = Buffer.from(await (await fetch(item.url)).arrayBuffer());
+    const mime = bytes ? imageMime(bytes) : null;
+    if (!bytes || !mime) {
+      fail("Image service unavailable, try again.");
+      return;
+    }
+    job.progress = 85;
+    const savedUrl = await saveBase64Image(`data:${mime};base64,${bytes.toString("base64")}`);
+    job.status = "completed";
+    job.progress = 100;
+    job.imageUrl = savedUrl;
+    job.provider = "Pollinations";
+    job.model = SKETCH_MODEL;
+    job.sketchGuided = true;
+  } catch {
+    fail("Image service unavailable, try again.");
+  }
 }
 
 /**
@@ -213,7 +316,7 @@ export async function executeTextGeneration(
         height: String(height),
         nologo: "true"
       });
-      url = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?${query.toString()}`;
+      url = `${GEN_BASE}/image/${encodeURIComponent(prompt)}?${query.toString()}`;
       headers = { Authorization: `Bearer ${key}` };
 
       try {
@@ -242,7 +345,7 @@ export async function executeTextGeneration(
         height: String(height),
         nologo: "true"
       });
-      url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${query.toString()}`;
+      url = `${LEGACY_BASE}/prompt/${encodeURIComponent(prompt)}?${query.toString()}`;
       headers = { "User-Agent": "Mozilla/5.0 sketch-probe" };
 
       response = await fetch(url, {
@@ -348,18 +451,14 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
   }
 
   const hasVisibleSketch = Boolean(sketchInspection && !sketchInspection.isBlank);
+  const useSketch = hasVisibleSketch && sketchBackendAvailable();
 
-  // In Outcome B: no sketch backend is available.
-  // visible sketch + no sketch backend -> allowTextOnly: true uses text backend;
-  // otherwise answer HTTP 409 { code: "SKETCH_UNAVAILABLE" } without calling anything upstream (3.5)
-  if (hasVisibleSketch) {
-    if (!allowTextOnly) {
-      res.status(409).json({
-        error: "Sketch-guided generation is not available",
-        code: "SKETCH_UNAVAILABLE"
-      });
-      return;
-    }
+  if (hasVisibleSketch && !useSketch && !allowTextOnly) {
+    res.status(409).json({
+      error: "Sketch-guided generation is not available",
+      code: "SKETCH_UNAVAILABLE"
+    });
+    return;
   }
 
   const seed = typeof incomingSeed === "number" ? incomingSeed : Math.floor(Math.random() * 1000000);
@@ -381,8 +480,11 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
 
   const prompt = buildPrompt(rawPrompt, styleId);
 
-  // Execute text generation asynchronously
-  void executeTextGeneration(job, prompt, dimensions.width, dimensions.height, seed);
+  if (useSketch && sketchInspection) {
+    void executeSketchGeneration(job, prompt, sketchInspection.buffer, dimensions.width, dimensions.height, seed);
+  } else {
+    void executeTextGeneration(job, prompt, dimensions.width, dimensions.height, seed);
+  }
 
   res.status(202).json({ jobId, status: "pending", seed });
 }
@@ -390,11 +492,11 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
 aiRouter.post("/generate", handleGenerateRequest);
 aiRouter.post("/enhance", handleGenerateRequest);
 
-// 3.6 Capabilities endpoint: in Outcome B, sketch is false, sketchModel is null
 aiRouter.get("/capabilities", (_req: Request, res: Response) => {
+  const available = sketchBackendAvailable();
   res.json({
-    sketch: false,
-    sketchModel: null
+    sketch: available,
+    sketchModel: available ? SKETCH_MODEL : null
   });
 });
 
