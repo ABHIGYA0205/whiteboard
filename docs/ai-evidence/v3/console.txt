@@ -1,0 +1,47 @@
+model klein | sketch 768x768 | output 1024x1024 | seed 424242 | gate: apple x <= 0.45 and >= 0.55
+
+== wording b
+     left       HTTP 200  10.8s 96421 bytes
+     right      HTTP 200  10.3s 97267 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1337,"leftRedFraction":0.0811,"rightRedFraction":0.067,"leftCentroidX":0.292,"rightCentroidX":0.748}
+     stick      HTTP 200  11.4s 124734 bytes
+     stickphoto HTTP 200  10.9s 140999 bytes
+     house      HTTP 200  10.8s 168800 bytes
+  kept white: stick 0.065, stick as photo 0, house 0.035  (about 0.9 = still a line drawing)
+
+== wording d
+     left       HTTP 200  11.8s 101671 bytes
+     right      HTTP 200  10.5s 100839 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.148,"leftRedFraction":0.0805,"rightRedFraction":0.0641,"leftCentroidX":0.31,"rightCentroidX":0.753}
+     stick      HTTP 200   9.7s 113400 bytes
+     stickphoto HTTP 200    10s 148128 bytes
+     house      HTTP 200    11s 243960 bytes
+  kept white: stick 0, stick as photo 0, house 0.001  (about 0.9 = still a line drawing)
+
+== wording c
+     left       HTTP 200  11.5s 98756 bytes
+     right      HTTP 200  12.4s 101864 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1527,"leftRedFraction":0.0824,"rightRedFraction":0.0737,"leftCentroidX":0.308,"rightCentroidX":0.72}
+     stick      HTTP 200  12.8s 136688 bytes
+     stickphoto HTTP 200  11.4s 172908 bytes
+     house      HTTP 200  14.1s 222157 bytes
+  kept white: stick 0, stick as photo 0, house 0.008  (about 0.9 = still a line drawing)
+
+== wording e
+     left       HTTP 200  11.6s 113829 bytes
+     right      HTTP 200  10.1s 110215 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.0922,"leftRedFraction":0.0967,"rightRedFraction":0.0912,"leftCentroidX":0.448,"rightCentroidX":0.582}
+     stick      HTTP 200  10.8s 162105 bytes
+     stickphoto HTTP 200  10.9s 181153 bytes
+     house      HTTP 200  12.6s 209471 bytes
+  kept white: stick 0, stick as photo 0, house 0.001  (about 0.9 = still a line drawing)
+
+================ SUMMARY (probe 3: which wording) ================
+PASS  wording b  appleX 0.292 / 0.748  margin yes  kept white: stick 0.065, house 0.035
+PASS  wording d  appleX 0.31 / 0.753  margin yes  kept white: stick 0, house 0.001
+PASS  wording c  appleX 0.308 / 0.72  margin yes  kept white: stick 0, house 0.008
+PASS  wording e  appleX 0.448 / 0.582  margin no  kept white: stick 0, house 0.001
+evidence: docs/ai-evidence/v3/  (open docs/ai-evidence/v3/contact-sheet.png)
+pictures made: 20 | estimated pollen spent: 0.100
+wordings file: server/src/config/sketchWordings.ts
+SKETCH WORDINGS: d, c, b, e (default: d)

@@ -1,0 +1,104 @@
+{
+  "probe": "four wordings, app conditions",
+  "model": "klein",
+  "sketchSize": 768,
+  "outputSize": 1024,
+  "seed": 424242,
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "margin": {
+    "leftMax": 0.4,
+    "rightMin": 0.6
+  },
+  "stopped": null,
+  "pictures": 20,
+  "estimatedPollenSpent": 0.1,
+  "order": [
+    "d",
+    "c",
+    "b",
+    "e"
+  ],
+  "results": [
+    {
+      "id": "b",
+      "template": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: {subject}. Each drawn object stays in the same place, at the same size and in the same pose. Add nothing that is not drawn.",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "1024x1024",
+        "rightSize": "1024x1024",
+        "sensitivity": 0.1337,
+        "leftRedFraction": 0.0811,
+        "rightRedFraction": 0.067,
+        "leftCentroidX": 0.292,
+        "rightCentroidX": 0.748
+      },
+      "margin": true,
+      "stickWhite": 0.065,
+      "stickPhotoWhite": 0,
+      "houseWhite": 0.035
+    },
+    {
+      "id": "d",
+      "template": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: {subject}. Each drawn object stays in the same place and in the same pose. Replace the lines with the real thing they stand for, fully rendered with volume, colour and detail; nothing stays a line drawing.",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "1024x1024",
+        "rightSize": "1024x1024",
+        "sensitivity": 0.148,
+        "leftRedFraction": 0.0805,
+        "rightRedFraction": 0.0641,
+        "leftCentroidX": 0.31,
+        "rightCentroidX": 0.753
+      },
+      "margin": true,
+      "stickWhite": 0,
+      "stickPhotoWhite": 0,
+      "houseWhite": 0.001
+    },
+    {
+      "id": "c",
+      "template": "Use this rough line sketch as the layout for a finished picture of: {subject}. Keep everything where it is drawn, in the same pose and at about the same size. The sketch is only a guide to placement: draw the real subject fully rendered with volume, colour and detail, not as a line drawing.",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "1024x1024",
+        "rightSize": "1024x1024",
+        "sensitivity": 0.1527,
+        "leftRedFraction": 0.0824,
+        "rightRedFraction": 0.0737,
+        "leftCentroidX": 0.308,
+        "rightCentroidX": 0.72
+      },
+      "margin": true,
+      "stickWhite": 0,
+      "stickPhotoWhite": 0,
+      "houseWhite": 0.008
+    },
+    {
+      "id": "e",
+      "template": "Turn this sketch into {subject}. Keep the same pose, position and layout as the sketch.",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "1024x1024",
+        "rightSize": "1024x1024",
+        "sensitivity": 0.0922,
+        "leftRedFraction": 0.0967,
+        "rightRedFraction": 0.0912,
+        "leftCentroidX": 0.448,
+        "rightCentroidX": 0.582
+      },
+      "margin": false,
+      "stickWhite": 0,
+      "stickPhotoWhite": 0,
+      "houseWhite": 0.001
+    }
+  ]
+}
