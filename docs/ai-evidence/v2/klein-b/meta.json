@@ -1,0 +1,37 @@
+{
+  "candidate": "klein-b",
+  "description": "klein, wording B",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 9,
+    "seed": 424242,
+    "prompt": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: one red apple on a plain light grey background, studio product photo. Each drawn object stays in the same place, at the same size and in the same pose. Add nothing that is not drawn.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=768x768 seed=424242 image=<file>"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 7.9,
+    "seed": 424242,
+    "prompt": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: one red apple on a plain light grey background, studio product photo. Each drawn object stays in the same place, at the same size and in the same pose. Add nothing that is not drawn.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=768x768 seed=424242 image=<file>"
+  },
+  "stick": {
+    "ok": true,
+    "status": 200,
+    "seconds": 8.1,
+    "seed": 424242,
+    "prompt": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: a man standing and holding a tall wooden stick, digital illustration. Each drawn object stays in the same place, at the same size and in the same pose. Add nothing that is not drawn.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=768x768 seed=424242 image=<file>"
+  },
+  "house": {
+    "ok": true,
+    "status": 200,
+    "seconds": 7,
+    "seed": 424242,
+    "prompt": "Convert this black-and-white line drawing into a finished picture while keeping its exact composition. The drawing shows: a small house with a chimney, front view, digital illustration. Each drawn object stays in the same place, at the same size and in the same pose. Add nothing that is not drawn.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=768x768 seed=424242 image=<file>"
+  }
+}

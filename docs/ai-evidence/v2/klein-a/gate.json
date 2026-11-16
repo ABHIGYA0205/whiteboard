@@ -1,0 +1,20 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/v2/klein-a",
+  "pass": true,
+  "reasons": [],
+  "metrics": {
+    "leftSize": "768x768",
+    "rightSize": "768x768",
+    "sensitivity": 0.1157,
+    "leftRedFraction": 0.0986,
+    "rightRedFraction": 0.1548,
+    "leftCentroidX": 0.306,
+    "rightCentroidX": 0.551
+  }
+}

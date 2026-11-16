@@ -1,0 +1,56 @@
+{
+  "probe": "drawing of an apple, same prompt and seed for both sides",
+  "subject": "one red apple on a plain light grey background, studio product photo",
+  "seed": 424242,
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "stopped": null,
+  "estimatedPollenSpent": 0.03,
+  "winners": [
+    "klein-a",
+    "klein-b"
+  ],
+  "results": [
+    {
+      "id": "klein-a",
+      "model": "klein",
+      "wording": "a",
+      "description": "klein, wording A",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0.1157,
+        "leftRedFraction": 0.0986,
+        "rightRedFraction": 0.1548,
+        "leftCentroidX": 0.306,
+        "rightCentroidX": 0.551
+      },
+      "separation": 0.245
+    },
+    {
+      "id": "klein-b",
+      "model": "klein",
+      "wording": "b",
+      "description": "klein, wording B",
+      "pass": true,
+      "reasons": [],
+      "metrics": {
+        "leftSize": "768x768",
+        "rightSize": "768x768",
+        "sensitivity": 0.1347,
+        "leftRedFraction": 0.0845,
+        "rightRedFraction": 0.0875,
+        "leftCentroidX": 0.289,
+        "rightCentroidX": 0.713
+      },
+      "separation": 0.424,
+      "extras": true
+    }
+  ]
+}

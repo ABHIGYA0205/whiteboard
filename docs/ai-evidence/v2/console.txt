@@ -1,0 +1,22 @@
+wallet before: unknown (this key cannot read the balance)
+
+== klein-a - klein, wording A
+     left  HTTP 200   7.8s 46043 bytes
+     right HTTP 200   9.8s 57096 bytes
+  PASS  {"leftSize":"768x768","rightSize":"768x768","sensitivity":0.1157,"leftRedFraction":0.0986,"rightRedFraction":0.1548,"leftCentroidX":0.306,"rightCentroidX":0.551}
+
+== klein-b - klein, wording B
+     left  HTTP 200     9s 43935 bytes
+     right HTTP 200   7.9s 46604 bytes
+  PASS  {"leftSize":"768x768","rightSize":"768x768","sensitivity":0.1347,"leftRedFraction":0.0845,"rightRedFraction":0.0875,"leftCentroidX":0.289,"rightCentroidX":0.713}
+
+== klein-b - stick figure and house
+     stick HTTP 200   8.1s 44343 bytes
+     house HTTP 200     7s 35415 bytes
+
+================ SUMMARY (probe 2: a real drawing) ================
+PASS  klein-a          sensitivity=0.1157 appleX(left)=0.306 appleX(right)=0.551
+PASS  klein-b          sensitivity=0.1347 appleX(left)=0.289 appleX(right)=0.713
+evidence: docs/ai-evidence/v2/  (open docs/ai-evidence/v2/contact-sheet.png)
+estimated pollen spent: 0.030
+DRAWING-CAPABLE BACKENDS: klein-a, klein-b
