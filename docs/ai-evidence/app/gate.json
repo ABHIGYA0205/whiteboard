@@ -1,0 +1,20 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/app",
+  "pass": true,
+  "reasons": [],
+  "metrics": {
+    "leftSize": "1024x1024",
+    "rightSize": "1024x1024",
+    "sensitivity": 0.148,
+    "leftRedFraction": 0.0805,
+    "rightRedFraction": 0.0641,
+    "leftCentroidX": 0.31,
+    "rightCentroidX": 0.753
+  }
+}

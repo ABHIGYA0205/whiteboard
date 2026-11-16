@@ -44,6 +44,7 @@ yarn-error.log*
 next-env.d.ts
 
 # Uploads & Media storage
+/uploads/
 server/uploads/*
 !server/uploads/.gitkeep
 server/scripts/smoke-result.*

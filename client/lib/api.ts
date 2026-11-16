@@ -67,14 +67,17 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
     }
 
     let message = `Request failed with status ${response.status}`;
+    let code: string | undefined;
     try {
       const body = await response.json();
       if (body?.error) message = body.error;
+      if (body?.code) code = body.code;
     } catch {
       // ignore parse errors
     }
-    const error = new Error(message) as Error & { status?: number };
+    const error = new Error(message) as Error & { status?: number; code?: string };
     error.status = response.status;
+    if (code) error.code = code;
     throw error;
   }
 

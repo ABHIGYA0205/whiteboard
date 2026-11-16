@@ -108,8 +108,11 @@ HF_TOKEN=your_token_optional
 
 | Variable | Description |
 |---|---|
-| `POLLINATIONS_API_KEY` | Pollinations API key (`https://enter.pollinations.ai`). Enables authenticated text-to-image models (e.g. `flux`) and higher capacity. Without it, AI images are text-only and share one free picture per 45 seconds across all users. |
-| `POLLINATIONS_TEXT_MODEL` | Optional model name for text generation with key (defaults to `flux`). |
+| `POLLINATIONS_API_KEY` | Pollinations secret key. With it a drawing is turned into a picture by FLUX.2 klein (0.005 pollen per picture) and text pictures use `flux` (0.002 pollen). When the key is rejected or the wallet is empty the app says so and offers text only. Without a key the AI feature is text only on the free service: one picture per 45 seconds for all users. |
+| `SKETCH_WORDING` | Optional. Id of a measured wording from `server/src/config/sketchWordings.ts`. Empty means the measured default. |
+| `POLLINATIONS_TEXT_MODEL` | Optional model for text pictures with a key (default `flux`). |
+
+The wordings are measured by `server/scripts/sketch-probe3.mjs` (evidence in `docs/ai-evidence/v3/`), and `npm run smoke:image` checks the real route (evidence in `docs/ai-evidence/app/`).
 
 #### Vercel Blob Storage (Preferred; Optional)
 

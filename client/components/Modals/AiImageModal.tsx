@@ -186,11 +186,14 @@ export function AiImageModal({
       setProgress(100);
       setGeneratedResult(res);
     } catch (err: any) {
-      if (err?.code === "RATE_LIMITED") {
-        const seconds = err.retryAfter || 45;
-        setError(
-          `The free image service allows one picture every 45 seconds for everyone using this app. Try again in ${seconds} s.`
-        );
+      if (err?.code === "SKETCH_UNAVAILABLE") {
+        try {
+          const caps = await getAiCapabilities();
+          setCapabilities(caps);
+        } catch {
+          // ignore
+        }
+        setError(err?.message || "Image service unavailable, try again.");
       } else {
         setError(err?.message || "Image service unavailable, try again.");
       }
@@ -470,7 +473,9 @@ export function AiImageModal({
                   />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: "12px", fontWeight: 700, color: isLight ? "#1e293b" : "#f1f5f9" }}>
-                      This is what the AI will see
+                      {capabilities.sketch
+                        ? "This is what the AI will see"
+                        : "Your drawing - not used, pictures are made from text only"}
                     </div>
                     {clusterNotice && (
                       <div style={{ fontSize: "11px", color: isLight ? "#64748b" : "#94a3b8", marginTop: "2px" }}>
@@ -478,6 +483,22 @@ export function AiImageModal({
                       </div>
                     )}
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSketch(undefined)}
+                    disabled={isGenerating}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: "4px 8px",
+                      fontSize: "12px",
+                      color: isLight ? "#64748b" : "#94a3b8",
+                      cursor: isGenerating ? "not-allowed" : "pointer",
+                      textDecoration: "underline"
+                    }}
+                  >
+                    Don't use my drawing
+                  </button>
                 </div>
 
                 {!isSketchBackendAvailable && (
