@@ -61,17 +61,20 @@ test("remote clear is tombstoned so old elements cannot merge back in", () => {
   assert.deepEqual(ids(), [], "already-cleared elements must stay cleared");
 });
 
-test("undo restores a deleted element and clears its tombstone", () => {
+test("undo restores a deleted element under a new id and the old id stays deleted", () => {
   reset();
   useBoardStore.getState().commitElements([el("a")]);
-  useBoardStore.getState().commitElements([el("a"), el("b")]);
-  const selected = useBoardStore.getState().selectElement("b");
-  void selected;
+  useBoardStore.getState().commitElements([el("a"), el("b", 7)]);
+  useBoardStore.getState().selectElement("b");
   useBoardStore.getState().deleteSelected();
   assert.deepEqual(ids(), ["a"]);
   useBoardStore.getState().undo();
-  assert.deepEqual(ids(), ["a", "b"]);
-  // A late peer upsert must not be swallowed by a stale tombstone.
+  const restored = useBoardStore.getState().elements.find((e) => e.id !== "a");
+  assert.equal(useBoardStore.getState().elements.length, 2);
+  assert.equal(restored?.x, 7);
+  assert.notEqual(restored?.id, "b", "the server and every peer have tombstoned the old id for good");
+  // A late copy of the OLD id is still swallowed by its tombstone; the restored element is unaffected.
   useBoardStore.getState().mergeRemoteElements([el("b", 42)]);
-  assert.deepEqual(ids(), ["a", "b"]);
+  assert.equal(useBoardStore.getState().elements.length, 2);
+  assert.ok(!ids().includes("b"));
 });

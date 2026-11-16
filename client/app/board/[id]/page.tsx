@@ -44,7 +44,7 @@ export default function BoardPage({ params }: BoardPageProps) {
   const version = useBoardStore((state) => state.version);
   const setVersion = useBoardStore((state) => state.setVersion);
   const loadBoard = useBoardStore((state) => state.loadBoard);
-  const commitElements = useBoardStore((state) => state.commitElements);
+  const restoreElements = useBoardStore((state) => state.restoreElements);
   const clearBoard = useBoardStore((state) => state.clearBoard);
   const undo = useBoardStore((state) => state.undo);
   const redo = useBoardStore((state) => state.redo);
@@ -375,8 +375,9 @@ export default function BoardPage({ params }: BoardPageProps) {
 
   const handleUndoClear = () => {
     if (clearedElementsBackup) {
-      commitElements(clearedElementsBackup);
-      collaboration.emitReplace(clearedElementsBackup);
+      // The cleared ids are deleted for everyone, so the elements come back under new ids.
+      const restored = restoreElements(clearedElementsBackup);
+      if (restored) collaboration.emitReplace(restored);
       setClearedElementsBackup(null);
     }
   };

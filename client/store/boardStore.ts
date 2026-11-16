@@ -10,6 +10,16 @@ import type {
 } from "@shared/types";
 import { create } from "zustand";
 import { mergeElementLists } from "@shared/collab";
+import {
+  applyEntry,
+  pushEntry,
+  rememberObjects,
+  resetLocalHistory,
+  restoreUnderNewIds,
+  takeEntry,
+  trackLocal,
+  type HistoryEntry
+} from "./localHistory";
 
 type StoredCursor = CursorPosition & { lastSeen: number };
 
@@ -22,8 +32,8 @@ export type LaserPoint = {
 
 type BoardState = {
   elements: WhiteboardElement[];
-  history: WhiteboardElement[][];
-  future: WhiteboardElement[][];
+  history: HistoryEntry[];
+  future: HistoryEntry[];
   clipboard: WhiteboardElement[];
   version: number;
   tool: ToolType;
@@ -95,6 +105,8 @@ type BoardState = {
     hitTest: (point: { x: number; y: number }, element: WhiteboardElement) => boolean
   ) => WhiteboardElement[] | null;
   clearBoard: () => void;
+  /** Puts elements back on the board under new ids (their old ids are deleted for everyone). */
+  restoreElements: (elements: WhiteboardElement[]) => WhiteboardElement[] | null;
   undo: () => WhiteboardElement[] | null;
   redo: () => WhiteboardElement[] | null;
   setViewport: (viewport: CanvasViewport) => void;
@@ -168,6 +180,38 @@ function markLocalEdits(
   return updated;
 }
 
+/** State update for a local action that ends an undo step. */
+function commitLocal(
+  state: BoardState,
+  next: WhiteboardElement[],
+  tombstones: Set<string> = state.deletedElementIds,
+  kind?: string
+): Pick<BoardState, "elements" | "localEditTimes" | "history" | "future"> {
+  trackLocal(state.elements, next);
+  const entry = takeEntry(next, tombstones, kind);
+  return {
+    elements: next,
+    localEditTimes: markLocalEdits(state.elements, next, state.localEditTimes),
+    history: entry ? pushEntry(state.history, entry) : state.history,
+    future: entry ? [] : state.future
+  };
+}
+
+/** A style change on the selection: applied at once and kept as its own undo step. */
+function styleLocal(state: BoardState, patch: Partial<WhiteboardElement>): Partial<BoardState> {
+  const idSet = new Set(state.selectedElementIds);
+  const next = state.elements.map((element) => (idSet.has(element.id) ? { ...element, ...patch } : element));
+  return commitLocal(state, next, state.deletedElementIds, "style");
+}
+
+function keepSelection(state: BoardState, elements: WhiteboardElement[]): Pick<BoardState, "selectedElementId" | "selectedElementIds"> {
+  const alive = new Set(elements.map((element) => element.id));
+  const selectedElementIds = state.selectedElementIds.filter((id) => alive.has(id));
+  const selectedElementId =
+    state.selectedElementId && alive.has(state.selectedElementId) ? state.selectedElementId : selectedElementIds[0] ?? null;
+  return { selectedElementId, selectedElementIds };
+}
+
 export const useBoardStore = create<BoardState>((set, get) => ({
   elements: [],
   history: [],
@@ -222,89 +266,57 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   setStrokeColor: (strokeColor) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeColor };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        strokeColor,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeColor } : el))
-      };
+      return { strokeColor, ...styleLocal(state, { strokeColor }) };
     }),
   setFillColor: (fillColor) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { fillColor };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        fillColor,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, fillColor } : el))
-      };
+      return { fillColor, ...styleLocal(state, { fillColor }) };
     }),
   setStrokeWidth: (strokeWidth) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeWidth };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        strokeWidth,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeWidth } : el))
-      };
+      return { strokeWidth, ...styleLocal(state, { strokeWidth }) };
     }),
   setStrokeStyle: (strokeStyle) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { strokeStyle };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        strokeStyle,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, strokeStyle } : el))
-      };
+      return { strokeStyle, ...styleLocal(state, { strokeStyle }) };
     }),
   setFillStyle: (fillStyle) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { fillStyle };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        fillStyle,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, fillStyle } : el))
-      };
+      return { fillStyle, ...styleLocal(state, { fillStyle }) };
     }),
   setRoughness: (roughness) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { roughness };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        roughness,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, roughness } : el))
-      };
+      return { roughness, ...styleLocal(state, { roughness }) };
     }),
   setRoundness: (roundness) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { roundness };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        roundness,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, roundness } : el))
-      };
+      return { roundness, ...styleLocal(state, { roundness }) };
     }),
   setOpacity: (opacity) =>
     set((state) => {
       if (state.selectedElementIds.length === 0 || state.tool !== "select") return { opacity };
-      const idSet = new Set(state.selectedElementIds);
-      return {
-        opacity,
-        elements: state.elements.map((el) => (idSet.has(el.id) ? { ...el, opacity } : el))
-      };
+      return { opacity, ...styleLocal(state, { opacity }) };
     }),
   setEditingElementId: (editingElementId) => set({ editingElementId }),
   setElements: (elements) =>
-    set((state) => ({
-      elements,
-      localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes)
-    })),
-  commitElements: (elements, previousElements) =>
-    set((state) => ({
-      elements,
-      localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes),
-      history: [...state.history, previousElements ?? state.elements],
-      future: []
-    })),
-  loadBoard: (elements, version = 0) =>
+    set((state) => {
+      trackLocal(state.elements, elements);
+      return {
+        elements,
+        localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes)
+      };
+    }),
+  // The second argument (previousElements) is accepted for the existing call sites and ignored: what
+  // the action changed is tracked element by element since its first setElements call.
+  commitElements: (elements) => set((state) => commitLocal(state, elements)),
+  loadBoard: (elements, version = 0) => {
+    resetLocalHistory();
     set({
       elements,
       version,
@@ -316,13 +328,9 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   activeElementIds: new Set<string>(),
       selectedElementId: null,
       selectedElementIds: []
-    }),
-  replaceElements: (elements) =>
-    set((state) => ({
-      elements,
-      history: [...state.history, state.elements],
-      future: []
-    })),
+    });
+  },
+  replaceElements: (elements) => set((state) => commitLocal(state, elements)),
   syncElements: (incomingElements, version) =>
     // Backwards-compatible alias: this used to REPLACE the whole board, which
     // silently deleted anything the sender did not know about (a peer's newer
@@ -447,10 +455,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
       nextElements = state.elements.filter((element) => !toDelete.has(element.id));
       return {
-        elements: nextElements,
+        ...commitLocal(state, nextElements, updatedDeleted),
         deletedElementIds: updatedDeleted,
-        history: [...state.history, state.elements],
-        future: [],
         selectedElementId: null,
         selectedElementIds: []
       };
@@ -483,9 +489,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       nextElements = [...state.elements, ...clones];
       const cloneIds = clones.map((c) => c.id);
       return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: [],
+        ...commitLocal(state, nextElements),
         selectedElementIds: cloneIds,
         selectedElementId: cloneIds[0] ?? null
       };
@@ -513,9 +517,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       nextElements = [...state.elements, ...clones];
       const cloneIds = clones.map((c) => c.id);
       return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: [],
+        ...commitLocal(state, nextElements),
         selectedElementIds: cloneIds,
         selectedElementId: cloneIds[0] ?? null
       };
@@ -536,11 +538,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           nextElements[i + 1] = temp;
         }
       }
-      return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: []
-      };
+      return commitLocal(state, nextElements);
     });
     return nextElements;
   },
@@ -558,11 +556,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
           nextElements[i - 1] = temp;
         }
       }
-      return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: []
-      };
+      return commitLocal(state, nextElements);
     });
     return nextElements;
   },
@@ -575,11 +569,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const moving = state.elements.filter((item) => idSet.has(item.id));
       const rest = state.elements.filter((item) => !idSet.has(item.id));
       nextElements = [...rest, ...moving];
-      return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: []
-      };
+      return commitLocal(state, nextElements);
     });
     return nextElements;
   },
@@ -592,11 +582,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const moving = state.elements.filter((item) => idSet.has(item.id));
       const rest = state.elements.filter((item) => !idSet.has(item.id));
       nextElements = [...moving, ...rest];
-      return {
-        elements: nextElements,
-        history: [...state.history, state.elements],
-        future: []
-      };
+      return commitLocal(state, nextElements);
     });
     return nextElements;
   },
@@ -613,37 +599,53 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       updatedDeleted.add(hoveredElement.id);
 
       nextElements = state.elements.filter((element) => element.id !== hoveredElement.id);
+      // No undo step here: the pointer-up commit closes one step for the whole eraser stroke.
+      trackLocal(state.elements, nextElements);
       return {
         elements: nextElements,
         deletedElementIds: updatedDeleted,
-        history: [...state.history, state.elements],
-        future: [],
         selectedElementId: null
       };
     });
     return nextElements;
   },
   clearBoard: () =>
-    set((state) => ({
-      elements: [],
-      history: [...state.history, state.elements],
-      future: [],
-      selectedElementId: null
-    })),
+    set((state) => {
+      // Tombstone what is cleared so a stale snapshot cannot bring it back; undo restores it under new ids.
+      const tombstones = new Set(state.deletedElementIds);
+      state.elements.forEach((element) => tombstones.add(element.id));
+      return {
+        ...commitLocal(state, [], tombstones, "clear"),
+        deletedElementIds: tombstones,
+        selectedElementId: null,
+        selectedElementIds: []
+      };
+    }),
+  restoreElements: (elements) => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      nextElements = restoreUnderNewIds(state.elements, state.deletedElementIds, elements);
+      return nextElements ? commitLocal(state, nextElements) : state;
+    });
+    return nextElements;
+  },
   undo: () => {
     let updated: WhiteboardElement[] | null = null;
     set((state) => {
-      const previous = state.history[state.history.length - 1];
-      if (!previous) return state;
-      updated = previous;
-      const tombstones = new Set(state.deletedElementIds);
-      previous.forEach((element) => tombstones.delete(element.id));
+      // Work that was never committed (for example text still being typed) becomes its own step first.
+      const open = takeEntry(state.elements, state.deletedElementIds);
+      const history = open ? pushEntry(state.history, open) : state.history;
+      const entry = history[history.length - 1];
+      if (!entry) return state;
+      const result = applyEntry(state.elements, state.deletedElementIds, entry, "undo");
+      updated = result.elements;
       return {
-        elements: previous,
-        deletedElementIds: tombstones,
-        localEditTimes: markLocalEdits(state.elements, previous, state.localEditTimes),
-        history: state.history.slice(0, -1),
-        future: [state.elements, ...state.future]
+        elements: result.elements,
+        deletedElementIds: result.tombstones,
+        localEditTimes: markLocalEdits(state.elements, result.elements, state.localEditTimes),
+        history: history.slice(0, -1),
+        future: open ? [entry] : [entry, ...state.future],
+        ...keepSelection(state, result.elements)
       };
     });
     return updated;
@@ -651,17 +653,20 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   redo: () => {
     let updated: WhiteboardElement[] | null = null;
     set((state) => {
-      const [next, ...remaining] = state.future;
-      if (!next) return state;
-      updated = next;
-      const tombstones = new Set(state.deletedElementIds);
-      next.forEach((element) => tombstones.delete(element.id));
+      // A new uncommitted local change makes the redo list meaningless, like any new action.
+      const open = takeEntry(state.elements, state.deletedElementIds);
+      if (open) return { history: pushEntry(state.history, open), future: [] };
+      const [entry, ...remaining] = state.future;
+      if (!entry) return state;
+      const result = applyEntry(state.elements, state.deletedElementIds, entry, "redo");
+      updated = result.elements;
       return {
-        elements: next,
-        deletedElementIds: tombstones,
-        localEditTimes: markLocalEdits(state.elements, next, state.localEditTimes),
-        history: [...state.history, state.elements],
-        future: remaining
+        elements: result.elements,
+        deletedElementIds: result.tombstones,
+        localEditTimes: markLocalEdits(state.elements, result.elements, state.localEditTimes),
+        history: [...state.history, entry],
+        future: remaining,
+        ...keepSelection(state, result.elements)
       };
     });
     return updated;
@@ -785,3 +790,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
   (window as unknown as { __boardStore?: typeof useBoardStore }).__boardStore = useBoardStore;
 }
+
+// Runs synchronously after every state change, so localHistory always knows which objects the store has held.
+useBoardStore.subscribe((state, previous) => {
+  if (state.elements !== previous.elements) rememberObjects(state.elements, previous.elements);
+});

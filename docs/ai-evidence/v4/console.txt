@@ -45,3 +45,4 @@ evidence: docs/ai-evidence/v4/  (open docs/ai-evidence/v4/contact-sheet.png)
 pictures made: 20 | estimated pollen spent: 0.100
 wordings file: server/src/config/sketchWordings.ts
 SKETCH WORDINGS: f, h, c (default: f)
+SKETCH WORDINGS: f, h, c (default: f, chosen by the reviewer)
