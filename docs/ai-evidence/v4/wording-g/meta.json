@@ -1,0 +1,22 @@
+{
+  "candidate": "wording-g",
+  "description": "klein, wording g",
+  "template": "Paint a finished picture of: {subject}. Use the line sketch as a pose and layout guide: each figure and object goes in the same position and pose as in the sketch. A stick figure is a pose guide for a person with natural proportions; its circle marks the head and its lines mark the torso, arms and legs. The guide lines themselves are not part of the picture.",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 10.8,
+    "seed": 424242,
+    "prompt": "Paint a finished picture of: one red apple on a plain light grey background, studio product photo. Use the line sketch as a pose and layout guide: each figure and object goes in the same position and pose as in the sketch. A stick figure is a pose guide for a person with natural proportions; its circle marks the head and its lines mark the torso, arms and legs. The guide lines themselves are not part of the picture.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<left.png>"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 10.5,
+    "seed": 424242,
+    "prompt": "Paint a finished picture of: one red apple on a plain light grey background, studio product photo. Use the line sketch as a pose and layout guide: each figure and object goes in the same position and pose as in the sketch. A stick figure is a pose guide for a person with natural proportions; its circle marks the head and its lines mark the torso, arms and legs. The guide lines themselves are not part of the picture.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<right.png>"
+  }
+}

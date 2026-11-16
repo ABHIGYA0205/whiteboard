@@ -1,0 +1,54 @@
+{
+  "candidate": "wording-h",
+  "description": "klein, wording h",
+  "template": "The sketch is a simple plan of: {subject}. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+  "seed": 424242,
+  "left": {
+    "ok": true,
+    "status": 200,
+    "seconds": 11,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: one red apple on a plain light grey background, studio product photo. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<left.png>"
+  },
+  "right": {
+    "ok": true,
+    "status": 200,
+    "seconds": 9.8,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: one red apple on a plain light grey background, studio product photo. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<right.png>"
+  },
+  "stick": {
+    "ok": true,
+    "status": 200,
+    "seconds": 9.9,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: a man standing and holding a tall wooden stick, vibrant digital art, trending on artstation, detailed illustration. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<stick.png>"
+  },
+  "stickphoto": {
+    "ok": true,
+    "status": 200,
+    "seconds": 11.3,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: a man standing and holding a tall wooden stick, photorealistic, hyperrealistic 8k resolution, cinematic lighting. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<stick.png>"
+  },
+  "house": {
+    "ok": true,
+    "status": 200,
+    "seconds": 11.9,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: a small house with a chimney, front view, vibrant digital art, trending on artstation, detailed illustration. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<house.png>"
+  },
+  "boyball": {
+    "ok": true,
+    "status": 200,
+    "seconds": 11.1,
+    "seed": 424242,
+    "prompt": "The sketch is a simple plan of: a boy standing next to a football, vibrant digital art, trending on artstation, detailed illustration. Read it like a storyboard: stick figures are people, their circles are heads and their lines are bodies, arms and legs; other outlines are the objects they look like. Now paint that scene as a finished, fully rendered picture, with every person and object in the same position and pose as in the plan.",
+    "request": "POST https://gen.pollinations.ai/v1/images/edits model=klein size=1024x1024 seed=424242 image=<boyball.png>"
+  }
+}

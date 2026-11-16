@@ -2,12 +2,12 @@
 1. text picture (no sketch)
    ok  model=black-forest-labs/flux.1-schnell  docs/ai-evidence/app/text.out.jpg (240281 bytes)
 2. capabilities
-   sketch=true sketchModel=klein wording=d
+   sketch=true sketchModel=klein wording=f
 3. apple drawing on the left and on the right (gate)
-   left  ok  model=klein size=1024x1024  docs/ai-evidence/app/left.out.jpg (101671 bytes)
-   right ok  model=klein size=1024x1024  docs/ai-evidence/app/right.out.jpg (100839 bytes)
-   gate: PASS {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.148,"leftRedFraction":0.0805,"rightRedFraction":0.0641,"leftCentroidX":0.31,"rightCentroidX":0.753}
+   left  ok  model=klein size=1024x1024  docs/ai-evidence/app/left.out.jpg (99930 bytes)
+   right ok  model=klein size=1024x1024  docs/ai-evidence/app/right.out.jpg (104968 bytes)
+   gate: PASS {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1513,"leftRedFraction":0.081,"rightRedFraction":0.0782,"leftCentroidX":0.307,"rightCentroidX":0.708}
 4. stick figure and house, style "digital" (not gated)
-   stick ok  docs/ai-evidence/app/stick.out.jpg (113400 bytes)
-   house ok  docs/ai-evidence/app/house.out.jpg (243960 bytes)
-SMOKE: PASS wording=d model=klein
+   stick ok  docs/ai-evidence/app/stick.out.jpg (127515 bytes)
+   house ok  docs/ai-evidence/app/house.out.jpg (219318 bytes)
+SMOKE: PASS wording=f model=klein

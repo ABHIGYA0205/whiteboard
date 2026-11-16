@@ -1,0 +1,20 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/v4/wording-h",
+  "pass": true,
+  "reasons": [],
+  "metrics": {
+    "leftSize": "1024x1024",
+    "rightSize": "1024x1024",
+    "sensitivity": 0.1331,
+    "leftRedFraction": 0.0638,
+    "rightRedFraction": 0.0799,
+    "leftCentroidX": 0.333,
+    "rightCentroidX": 0.702
+  }
+}

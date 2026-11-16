@@ -11,10 +11,10 @@
   "metrics": {
     "leftSize": "1024x1024",
     "rightSize": "1024x1024",
-    "sensitivity": 0.148,
-    "leftRedFraction": 0.0805,
-    "rightRedFraction": 0.0641,
-    "leftCentroidX": 0.31,
-    "rightCentroidX": 0.753
+    "sensitivity": 0.1513,
+    "leftRedFraction": 0.081,
+    "rightRedFraction": 0.0782,
+    "leftCentroidX": 0.307,
+    "rightCentroidX": 0.708
   }
 }

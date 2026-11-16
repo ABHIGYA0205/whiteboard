@@ -1,0 +1,22 @@
+{
+  "limits": {
+    "minSensitivity": 0.03,
+    "minRedFraction": 0.01,
+    "leftMaxCentroid": 0.45,
+    "rightMinCentroid": 0.55
+  },
+  "dir": "docs/ai-evidence/v4/wording-g",
+  "pass": false,
+  "reasons": [
+    "WRONG PLACE: left sketch -> apple centre at x=0.46 (need <= 0.45)"
+  ],
+  "metrics": {
+    "leftSize": "1024x1024",
+    "rightSize": "1024x1024",
+    "sensitivity": 0.1034,
+    "leftRedFraction": 0.0844,
+    "rightRedFraction": 0.101,
+    "leftCentroidX": 0.455,
+    "rightCentroidX": 0.6
+  }
+}

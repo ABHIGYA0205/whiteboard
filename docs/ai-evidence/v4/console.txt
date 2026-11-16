@@ -1,0 +1,47 @@
+model klein | sketch 768x768 | output 1024x1024 | seed 424242 | gate: apple x <= 0.45 and >= 0.55
+
+== wording c
+     left       HTTP 200   1.2s 98756 bytes
+     right      HTTP 200   0.5s 101864 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1527,"leftRedFraction":0.0824,"rightRedFraction":0.0737,"leftCentroidX":0.308,"rightCentroidX":0.72}
+     stick      HTTP 200   0.6s 136688 bytes
+     stickphoto HTTP 200   0.6s 172908 bytes
+     house      HTTP 200   0.5s 222157 bytes
+     boyball    HTTP 200  11.9s 138582 bytes
+  kept white: stick 0, stick as photo 0, house 0.008, boy with ball 0  (about 0.9 = still a line drawing)
+
+== wording f
+     left       HTTP 200  11.7s 99930 bytes
+     right      HTTP 200  10.2s 104968 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1513,"leftRedFraction":0.081,"rightRedFraction":0.0782,"leftCentroidX":0.307,"rightCentroidX":0.708}
+     stick      HTTP 200    11s 127515 bytes
+     stickphoto HTTP 200  11.7s 153647 bytes
+     house      HTTP 200    12s 219318 bytes
+     boyball    HTTP 200  10.7s 127705 bytes
+  kept white: stick 0.001, stick as photo 0, house 0.001, boy with ball 0  (about 0.9 = still a line drawing)
+
+== wording g
+     left       HTTP 200  10.8s 125122 bytes
+     right      HTTP 200  10.5s 125899 bytes
+  FAIL  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1034,"leftRedFraction":0.0844,"rightRedFraction":0.101,"leftCentroidX":0.455,"rightCentroidX":0.6}
+        - WRONG PLACE: left sketch -> apple centre at x=0.46 (need <= 0.45)
+
+== wording h
+     left       HTTP 200    11s 116997 bytes
+     right      HTTP 200   9.8s 128672 bytes
+  PASS  {"leftSize":"1024x1024","rightSize":"1024x1024","sensitivity":0.1331,"leftRedFraction":0.0638,"rightRedFraction":0.0799,"leftCentroidX":0.333,"rightCentroidX":0.702}
+     stick      HTTP 200   9.9s 112519 bytes
+     stickphoto HTTP 200  11.3s 128909 bytes
+     house      HTTP 200  11.9s 214492 bytes
+     boyball    HTTP 200  11.1s 77212 bytes
+  kept white: stick 0.001, stick as photo 0, house 0.002, boy with ball 0.006  (about 0.9 = still a line drawing)
+
+================ SUMMARY (probe 4: stick-figure wordings) ================
+PASS  wording c  appleX 0.308 / 0.72  margin yes  kept white: stick 0, house 0.008
+PASS  wording f  appleX 0.307 / 0.708  margin yes  kept white: stick 0.001, house 0.001
+FAIL  wording g  appleX 0.455 / 0.6
+PASS  wording h  appleX 0.333 / 0.702  margin yes  kept white: stick 0.001, house 0.002
+evidence: docs/ai-evidence/v4/  (open docs/ai-evidence/v4/contact-sheet.png)
+pictures made: 20 | estimated pollen spent: 0.100
+wordings file: server/src/config/sketchWordings.ts
+SKETCH WORDINGS: f, h, c (default: f)

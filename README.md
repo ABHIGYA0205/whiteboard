@@ -112,7 +112,7 @@ HF_TOKEN=your_token_optional
 | `SKETCH_WORDING` | Optional. Id of a measured wording from `server/src/config/sketchWordings.ts`. Empty means the measured default. |
 | `POLLINATIONS_TEXT_MODEL` | Optional model for text pictures with a key (default `flux`). |
 
-The wordings are measured by `server/scripts/sketch-probe3.mjs` (evidence in `docs/ai-evidence/v3/`), and `npm run smoke:image` checks the real route (evidence in `docs/ai-evidence/app/`).
+The wordings are measured by `server/scripts/sketch-probe4.mjs` (evidence in `docs/ai-evidence/v4/`), and `npm run smoke:image` checks the real route (evidence in `docs/ai-evidence/app/`).
 
 #### Vercel Blob Storage (Preferred; Optional)
 
