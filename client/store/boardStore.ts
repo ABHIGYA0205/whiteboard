@@ -10,6 +10,7 @@ import type {
 } from "@shared/types";
 import { create } from "zustand";
 import { mergeElementLists } from "@shared/collab";
+import { sortByLayer, withLayerNumbers, withoutLayer } from "@shared/layers";
 import {
   applyEntry,
   pushEntry,
@@ -93,6 +94,8 @@ type BoardState = {
   applyRemoteClear: () => void;
   selectElement: (id: string | null | string[]) => void;
   deleteSelected: () => WhiteboardElement[] | null;
+  /** Deletes the given elements for everyone (they are tombstoned), as one undo step. */
+  removeElements: (ids: string[]) => WhiteboardElement[] | null;
   copySelected: () => void;
   paste: (offset?: Point) => WhiteboardElement[] | null;
   duplicateSelected: () => WhiteboardElement[] | null;
@@ -202,6 +205,28 @@ function styleLocal(state: BoardState, patch: Partial<WhiteboardElement>): Parti
   const idSet = new Set(state.selectedElementIds);
   const next = state.elements.map((element) => (idSet.has(element.id) ? { ...element, ...patch } : element));
   return commitLocal(state, next, state.deletedElementIds, "style");
+}
+
+/**
+ * A layer change: `reordered` is the board in its new array order. The order is written into the
+ * elements as layer numbers, because only element data reaches the other users and the storage.
+ * Returns null when the order did not change.
+ */
+function layerLocal(
+  state: BoardState,
+  reordered: WhiteboardElement[]
+): { patch: Pick<BoardState, "elements" | "localEditTimes" | "history" | "future">; elements: WhiteboardElement[] } | null {
+  if (reordered.every((element, index) => element === state.elements[index])) return null;
+  // First every element gets a number for the place it has NOW. Those numbers depend only on the
+  // board, so two users who change layers at the same moment write the same numbers on everything
+  // that neither of them moved. Then only the moved elements are renumbered.
+  const inPlace = new Map<string, WhiteboardElement>();
+  for (const element of withLayerNumbers(state.elements)) inPlace.set(element.id, element);
+  const elements = withLayerNumbers(
+    reordered.map((element) => inPlace.get(element.id) as WhiteboardElement),
+    new Set(state.selectedElementIds)
+  );
+  return { patch: commitLocal(state, elements, state.deletedElementIds, "layer"), elements };
 }
 
 function keepSelection(state: BoardState, elements: WhiteboardElement[]): Pick<BoardState, "selectedElementId" | "selectedElementIds"> {
@@ -318,7 +343,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   loadBoard: (elements, version = 0) => {
     resetLocalHistory();
     set({
-      elements,
+      elements: sortByLayer(elements),
       version,
       history: [],
       future: [],
@@ -463,6 +488,23 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     });
     return nextElements;
   },
+  removeElements: (ids) => {
+    let nextElements: WhiteboardElement[] | null = null;
+    set((state) => {
+      if (ids.length === 0) return state;
+      const toDelete = new Set(ids);
+      const updatedDeleted = new Set(state.deletedElementIds);
+      ids.forEach((id) => updatedDeleted.add(id));
+
+      nextElements = state.elements.filter((element) => !toDelete.has(element.id));
+      return {
+        ...commitLocal(state, nextElements, updatedDeleted),
+        deletedElementIds: updatedDeleted,
+        ...keepSelection(state, nextElements)
+      };
+    });
+    return nextElements;
+  },
   // F1.2: Copy selected elements to clipboard
   copySelected: () => {
     const state = get();
@@ -479,7 +521,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set((state) => {
       if (state.clipboard.length === 0) return state;
       const clones = state.clipboard.map((item) => ({
-        ...item,
+        ...withoutLayer(item),
         id: crypto.randomUUID(),
         x: item.x + offset.x,
         y: item.y + offset.y,
@@ -507,7 +549,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
 
       const offset = 24;
       const clones: WhiteboardElement[] = toClone.map((el) => ({
-        ...el,
+        ...withoutLayer(el),
         id: crypto.randomUUID(),
         x: el.x + offset,
         y: el.y + offset,
@@ -530,15 +572,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set((state) => {
       if (state.selectedElementIds.length === 0) return state;
       const idSet = new Set(state.selectedElementIds);
-      nextElements = [...state.elements];
-      for (let i = nextElements.length - 2; i >= 0; i--) {
-        if (idSet.has(nextElements[i].id) && !idSet.has(nextElements[i + 1].id)) {
-          const temp = nextElements[i];
-          nextElements[i] = nextElements[i + 1];
-          nextElements[i + 1] = temp;
+      const reordered = [...state.elements];
+      for (let i = reordered.length - 2; i >= 0; i--) {
+        if (idSet.has(reordered[i].id) && !idSet.has(reordered[i + 1].id)) {
+          const temp = reordered[i];
+          reordered[i] = reordered[i + 1];
+          reordered[i + 1] = temp;
         }
       }
-      return commitLocal(state, nextElements);
+      const change = layerLocal(state, reordered);
+      if (!change) return state;
+      nextElements = change.elements;
+      return change.patch;
     });
     return nextElements;
   },
@@ -548,15 +593,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     set((state) => {
       if (state.selectedElementIds.length === 0) return state;
       const idSet = new Set(state.selectedElementIds);
-      nextElements = [...state.elements];
-      for (let i = 1; i < nextElements.length; i++) {
-        if (idSet.has(nextElements[i].id) && !idSet.has(nextElements[i - 1].id)) {
-          const temp = nextElements[i];
-          nextElements[i] = nextElements[i - 1];
-          nextElements[i - 1] = temp;
+      const reordered = [...state.elements];
+      for (let i = 1; i < reordered.length; i++) {
+        if (idSet.has(reordered[i].id) && !idSet.has(reordered[i - 1].id)) {
+          const temp = reordered[i];
+          reordered[i] = reordered[i - 1];
+          reordered[i - 1] = temp;
         }
       }
-      return commitLocal(state, nextElements);
+      const change = layerLocal(state, reordered);
+      if (!change) return state;
+      nextElements = change.elements;
+      return change.patch;
     });
     return nextElements;
   },
@@ -568,8 +616,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const idSet = new Set(state.selectedElementIds);
       const moving = state.elements.filter((item) => idSet.has(item.id));
       const rest = state.elements.filter((item) => !idSet.has(item.id));
-      nextElements = [...rest, ...moving];
-      return commitLocal(state, nextElements);
+      const change = layerLocal(state, [...rest, ...moving]);
+      if (!change) return state;
+      nextElements = change.elements;
+      return change.patch;
     });
     return nextElements;
   },
@@ -581,8 +631,10 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       const idSet = new Set(state.selectedElementIds);
       const moving = state.elements.filter((item) => idSet.has(item.id));
       const rest = state.elements.filter((item) => !idSet.has(item.id));
-      nextElements = [...moving, ...rest];
-      return commitLocal(state, nextElements);
+      const change = layerLocal(state, [...moving, ...rest]);
+      if (!change) return state;
+      nextElements = change.elements;
+      return change.patch;
     });
     return nextElements;
   },
@@ -624,7 +676,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   restoreElements: (elements) => {
     let nextElements: WhiteboardElement[] | null = null;
     set((state) => {
-      nextElements = restoreUnderNewIds(state.elements, state.deletedElementIds, elements);
+      const restored = restoreUnderNewIds(state.elements, state.deletedElementIds, elements);
+      nextElements = restored ? sortByLayer(restored) : null;
       return nextElements ? commitLocal(state, nextElements) : state;
     });
     return nextElements;
@@ -690,11 +743,12 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
       const index = state.elements.findIndex((candidate) => candidate.id === element.id);
       if (index === -1) {
-        return { elements: [...state.elements, element] };
+        return { elements: sortByLayer([...state.elements, element]) };
       }
       const nextElements = [...state.elements];
       nextElements[index] = element;
-      return { elements: nextElements };
+      // A peer's layer change arrives as a new layer number on the element.
+      return { elements: sortByLayer(nextElements) };
     }),
   upsertRemoteCursor: (cursor) =>
     set((state) => {

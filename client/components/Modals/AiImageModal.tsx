@@ -16,7 +16,7 @@ import {
   Layers,
   ArrowRight
 } from "lucide-react";
-import { generateAiImage, getAiCapabilities, type GenerateAiImageResult } from "@/lib/api";
+import { generateAiImage, getAiCapabilities, type AiCapabilities, type GenerateAiImageResult } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 
 type AiImageModalProps = {
@@ -96,7 +96,7 @@ export function AiImageModal({
   const [error, setError] = useState<string | null>(null);
   const [activeSketch, setActiveSketch] = useState<string | undefined>(undefined);
   const [clusterNotice, setClusterNotice] = useState(false);
-  const [capabilities, setCapabilities] = useState<{ sketch: boolean; sketchModel: string | null }>({
+  const [capabilities, setCapabilities] = useState<AiCapabilities>({
     sketch: false,
     sketchModel: null
   });
@@ -145,6 +145,14 @@ export function AiImageModal({
 
   const hasSketch = Boolean(activeSketch);
   const isSketchBackendAvailable = Boolean(capabilities.sketch);
+  // Say why the drawing is not used: "not set up" is wrong (and useless to the site owner) when the
+  // image account simply ran out of credit or its key was rejected.
+  const sketchOffNote =
+    capabilities.reason === "credit"
+      ? "Sketch-guided generation is paused: the image account of this site is out of credit."
+      : capabilities.reason === "key"
+        ? "Sketch-guided generation is paused: the image service rejected this site's key."
+        : "Sketch-guided generation is not set up on this server.";
 
   // Label calculations (3.7)
   let badgeLabel = "No sketch - text only";
@@ -512,7 +520,7 @@ export function AiImageModal({
                       border: isLight ? "1px solid #fde68a" : "1px solid rgba(245, 158, 11, 0.25)"
                     }}
                   >
-                    Sketch-guided generation is not set up on this server. The picture will be made from your text only.
+                    {sketchOffNote} The picture will be made from your text only.
                   </div>
                 )}
               </div>

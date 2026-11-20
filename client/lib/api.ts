@@ -262,9 +262,16 @@ export interface GenerateAiImageResult {
   sketchIgnored?: string | null;
 }
 
-export async function getAiCapabilities(): Promise<{ sketch: boolean; sketchModel: string | null }> {
+export type AiCapabilities = {
+  sketch: boolean;
+  sketchModel: string | null;
+  /** Why sketch-guided generation is off: never set up, no credit left, or the key was rejected. */
+  reason?: "not_configured" | "credit" | "key" | null;
+};
+
+export async function getAiCapabilities(): Promise<AiCapabilities> {
   try {
-    return await request<{ sketch: boolean; sketchModel: string | null }>("/ai/capabilities");
+    return await request<AiCapabilities>("/ai/capabilities");
   } catch {
     return { sketch: false, sketchModel: null };
   }

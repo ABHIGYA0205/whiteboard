@@ -181,11 +181,14 @@ export function resetRateLimitsForTesting(): void {
   ipRateLimit.clear();
   jobs.clear();
   sketchDownUntil = 0;
+  sketchDownReason = null;
 }
 
 const GEN_BASE = process.env.POLLINATIONS_GEN_BASE || "https://gen.pollinations.ai";
 const LEGACY_BASE = process.env.POLLINATIONS_LEGACY_BASE || "https://image.pollinations.ai";
 let sketchDownUntil = 0;
+/** Why the image service refused the last sketch request: no credit left (402) or a rejected key (401). */
+let sketchDownReason: "credit" | "key" | null = null;
 
 /** The measured wording in use: SKETCH_WORDING if it names a listed wording, else the measured default. */
 export function activeSketchWording(): SketchWording | null {
@@ -204,6 +207,13 @@ export function sketchEditPrompt(subject: string): string {
 
 export function sketchBackendAvailable(): boolean {
   return Boolean(env.pollinationsApiKey) && activeSketchWording() !== null && Date.now() >= sketchDownUntil;
+}
+
+/** Why sketch-guided generation is off right now, or null when it is on. */
+export function sketchUnavailableReason(): "not_configured" | "credit" | "key" | null {
+  if (!env.pollinationsApiKey || activeSketchWording() === null) return "not_configured";
+  if (Date.now() < sketchDownUntil) return sketchDownReason ?? "credit";
+  return null;
 }
 
 function imageMime(bytes: Buffer): string | null {
@@ -248,6 +258,7 @@ export async function executeSketchGeneration(
     });
     if (response.status === 401 || response.status === 402) {
       sketchDownUntil = Date.now() + 10 * 60 * 1000;
+      sketchDownReason = response.status === 402 ? "credit" : "key";
       fail("Sketch-guided generation is unavailable right now. You can still generate from your text.", "SKETCH_UNAVAILABLE");
       return;
     }
@@ -496,7 +507,8 @@ aiRouter.get("/capabilities", (_req: Request, res: Response) => {
   const available = sketchBackendAvailable();
   res.json({
     sketch: available,
-    sketchModel: available ? SKETCH_MODEL : null
+    sketchModel: available ? SKETCH_MODEL : null,
+    reason: sketchUnavailableReason()
   });
 });
 

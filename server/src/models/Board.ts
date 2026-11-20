@@ -34,6 +34,8 @@ const elementSchema = new Schema(
     isLocked: { type: Boolean, default: false },
     startBinding: { type: Schema.Types.Mixed },
     endBinding: { type: Schema.Types.Mixed },
+    // Layer number, written by a layer change on the client. No default: most elements have none.
+    z: { type: Number },
     points: { type: [pointSchema], default: [] }
   },
   { _id: false, strict: false }

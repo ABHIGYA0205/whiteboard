@@ -1,4 +1,5 @@
 import type { WhiteboardElement } from "./types";
+import { sortByLayer } from "./layers";
 
 /**
  * Conflict-free merge for collaborative boards.
@@ -41,7 +42,8 @@ export function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean
     a.text !== b.text ||
     a.fontSize !== b.fontSize ||
     a.imageUrl !== b.imageUrl ||
-    a.isLocked !== b.isLocked
+    a.isLocked !== b.isLocked ||
+    a.z !== b.z
   ) {
     return false;
   }
@@ -151,9 +153,13 @@ export function mergeElementLists({
     }
   }
 
-  const elements = order
+  const merged = order
     .filter((id) => byId.has(id))
     .map((id) => byId.get(id) as WhiteboardElement);
+
+  // A peer's layer change arrives as new layer numbers on the elements: arrange the array by them.
+  const elements = sortByLayer(merged);
+  if (elements !== merged) changed = true;
 
   return { elements, changed, tombstones };
 }

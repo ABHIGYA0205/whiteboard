@@ -17,6 +17,7 @@ import {
   getNormalizedBounds
 } from "@/components/Canvas/drawingUtils";
 import { useBoardStore } from "@/store/boardStore";
+import { withoutLayer } from "@shared/layers";
 import type {
   CursorPosition,
   Point,
@@ -430,8 +431,9 @@ export function useCanvas({
           const targetIds = selectedElementIds.includes(activeElement.id) ? selectedElementIds : [activeElement.id];
           const idSet = new Set(targetIds);
           const toClone = currentElements.filter((el) => idSet.has(el.id));
+          // A copy is a new element: it gets no layer number, so it is on top for everyone.
           const clones = toClone.map((el) => ({
-            ...el,
+            ...withoutLayer(el),
             id: crypto.randomUUID(),
             points: el.points.map((p) => ({ ...p }))
           }));

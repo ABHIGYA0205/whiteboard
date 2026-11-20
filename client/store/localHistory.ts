@@ -1,4 +1,5 @@
 import type { WhiteboardElement } from "@shared/types";
+import { longestAscending, sortByLayer, withLayerNumbers } from "@shared/layers";
 
 /** One element as it was before and after a local action. `null` = it did not exist. */
 export type ElementChange = {
@@ -92,10 +93,15 @@ function fieldEqual(a: unknown, b: unknown): boolean {
   return ak.every((key) => fieldEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
 }
 
-/** Fields (never the id) whose value differs between two versions of an element. */
+/**
+ * Fields whose value differs between two versions of an element. Never the id, and never the layer
+ * number: a layer change is kept as an order (orderBefore / orderAfter), and the numbers are written
+ * again from that order when it is undone or redone.
+ */
 function changedKeys(a: WhiteboardElement, b: WhiteboardElement): string[] {
   const keys = new Set<string>([...Object.keys(a), ...Object.keys(b)]);
   keys.delete("id");
+  keys.delete("z");
   const ra = a as unknown as Record<string, unknown>;
   const rb = b as unknown as Record<string, unknown>;
   return Array.from(keys).filter((key) => !fieldEqual(ra[key], rb[key]));
@@ -167,9 +173,11 @@ export function takeEntry(committed: WhiteboardElement[], tombstones: Set<string
     if (before !== after && changedKeys(before, after).length > 0) changes.push({ id, before, after, index });
   }
 
+  // Only a layer change of the local user is an order change. Any other action leaves the order
+  // alone, so a peer's layer change that arrives in the middle of it is never mistaken for mine.
   let orderBefore: string[] | null = null;
   let orderAfter: string[] | null = null;
-  if (pendingOrder) {
+  if (pendingOrder && kind === "layer") {
     const afterIds = committed.map((element) => element.id);
     const afterSet = new Set(afterIds);
     const beforeSet = new Set(pendingOrder);
@@ -221,24 +229,49 @@ function fixBindings(element: WhiteboardElement): WhiteboardElement {
   };
 }
 
-/** Puts the listed ids into the given relative order, inside the slots they occupy now. */
-function reorderLike(elements: WhiteboardElement[], order: string[]): WhiteboardElement[] {
-  const rank = new Map<string, number>();
-  order.forEach((id, index) => rank.set(resolveId(id), index));
-  const slots: number[] = [];
-  const picked: WhiteboardElement[] = [];
-  elements.forEach((element, index) => {
-    if (rank.has(element.id)) {
-      slots.push(index);
-      picked.push(element);
+/**
+ * Takes a layer change from the order `from` to the order `to` (two orders of the same ids) and
+ * applies it to the board as it is NOW: only the elements that the change moved are moved, each to
+ * its place in `to`. Everything else keeps the order it has now, so a layer change that somebody
+ * else made in the meantime stays.
+ */
+function moveLike(
+  elements: WhiteboardElement[],
+  from: string[],
+  to: string[]
+): { elements: WhiteboardElement[]; moved: Set<string> } {
+  const target = to.map(resolveId);
+  const place = new Map<string, number>();
+  target.forEach((id, index) => place.set(id, index));
+  const source = from.map(resolveId).filter((id) => place.has(id));
+  const stays = longestAscending(source.map((id) => place.get(id) as number));
+  const moved = new Set(source.filter((_, index) => !stays[index]));
+  if (moved.size === 0) return { elements, moved };
+
+  // Every moved element follows the nearest element that comes before it in `to` and is on the board now.
+  const byId = new Map<string, WhiteboardElement>();
+  for (const element of elements) byId.set(element.id, element);
+  const follower = new Map<string | null, string>();
+  let last: string | null = null;
+  for (const id of target) {
+    if (!byId.has(id)) continue; // deleted in the meantime
+    if (moved.has(id)) follower.set(last, id);
+    last = id;
+  }
+
+  const out: WhiteboardElement[] = [];
+  const placeFollowers = (id: string | null) => {
+    for (let next = follower.get(id); next !== undefined; next = follower.get(next)) {
+      out.push(byId.get(next) as WhiteboardElement);
     }
-  });
-  picked.sort((a, b) => (rank.get(a.id) as number) - (rank.get(b.id) as number));
-  const out = elements.slice();
-  slots.forEach((slot, index) => {
-    out[slot] = picked[index];
-  });
-  return out;
+  };
+  placeFollowers(null); // moved to the very bottom
+  for (const element of elements) {
+    if (moved.has(element.id)) continue;
+    out.push(element);
+    placeFollowers(element.id);
+  }
+  return { elements: out, moved };
 }
 
 /** Applies one undo step backwards ("undo") or forwards ("redo") to the CURRENT board. */
@@ -296,8 +329,16 @@ export function applyEntry(
   }
   if (aliased || idAliases.size > 0) next = next.map(fixBindings);
 
-  const order = direction === "undo" ? entry.orderBefore : entry.orderAfter;
-  if (order) next = reorderLike(next, order);
+  // The order travels to the other users as layer numbers: write them for a restored order, and
+  // let an element that came back with its old number take its old place.
+  const from = direction === "undo" ? entry.orderAfter : entry.orderBefore;
+  const to = direction === "undo" ? entry.orderBefore : entry.orderAfter;
+  if (from && to) {
+    const back = moveLike(next, from, to);
+    next = withLayerNumbers(back.elements, back.moved);
+  } else {
+    next = sortByLayer(next);
+  }
   return { elements: next, tombstones: nextTombstones };
 }
 

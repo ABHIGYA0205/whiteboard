@@ -46,13 +46,16 @@ export function pickSketchElements(
     return [];
   }
 
-  // 1. Selection not empty -> exactly the selected elements
+  // 1. Something is selected -> exactly the selected elements, except pictures. A picture is never
+  //    a sketch: right after "Add to Canvas" the new picture is the selection, and it must not be
+  //    sent back to the AI as if it were the drawing.
   if (selectedIds && selectedIds.length > 0) {
     const idSet = new Set(selectedIds);
-    return elements.filter((el) => idSet.has(el.id));
+    const selected = elements.filter((el) => idSet.has(el.id) && el.type !== "image");
+    if (selected.length > 0) return selected;
   }
 
-  // 2. Nothing selected -> cluster around the most recent drawing element
+  // 2. Nothing usable selected -> cluster around the most recent drawing element
   const drawingElements = elements.filter((el) => DRAWING_TYPES.has(el.type));
   if (drawingElements.length === 0) {
     return [];

@@ -197,24 +197,24 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     assert.equal(recordedRequests.length, 1);
   });
 
-  // 3. GET /ai/capabilities is { sketch: false, sketchModel: null }
-  test("3. Without a key: GET /ai/capabilities is { sketch: false, sketchModel: null }", async () => {
+  // 3. GET /ai/capabilities is { sketch: false, sketchModel: null, reason: "not_configured" }
+  test("3. Without a key: GET /ai/capabilities is { sketch: false, sketchModel: null, reason: not_configured }", async () => {
     delete process.env.POLLINATIONS_API_KEY;
     const res = await fetch(`${baseUrl}/ai/capabilities`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body, { sketch: false, sketchModel: null });
+    assert.deepEqual(body, { sketch: false, sketchModel: null, reason: "not_configured" });
   });
 
   // --- With a key ---
 
-  // 4. GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL }
-  test("4. With a key: GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL }", async () => {
+  // 4. GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL, reason: null }
+  test("4. With a key: GET /ai/capabilities is { sketch: true, sketchModel: SKETCH_MODEL, reason: null }", async () => {
     process.env.POLLINATIONS_API_KEY = "test-key-12345";
     const res = await fetch(`${baseUrl}/ai/capabilities`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body, { sketch: true, sketchModel: SKETCH_MODEL });
+    assert.deepEqual(body, { sketch: true, sketchModel: SKETCH_MODEL, reason: null });
   });
 
   // 5. A 768x384 PNG with dark strokes, style digital, fixed seed -> 1 upstream edit request, job sketchGuided: true
@@ -296,6 +296,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
     const caps = await capsRes.json();
     assert.equal(caps.sketch, false);
+    assert.equal(caps.reason, "credit", "402 means the account has no credit left, not that nothing is set up");
 
     // Same POST now answers HTTP 409
     const res2 = await fetch(`${baseUrl}/ai/generate`, {
@@ -337,6 +338,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
     const caps = await capsRes.json();
     assert.equal(caps.sketch, false);
+    assert.equal(caps.reason, "key", "401 means the key was rejected");
 
     const res2 = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
@@ -374,6 +376,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     const capsRes = await fetch(`${baseUrl}/ai/capabilities`);
     const caps = await capsRes.json();
     assert.equal(caps.sketch, true);
+    assert.equal(caps.reason, null);
   });
 
   // 9. Upstream answers 429 with retry-after: 12: errorCode: RATE_LIMITED, retryAfter: 12

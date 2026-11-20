@@ -42,6 +42,8 @@ export type WhiteboardElement = {
   isLocked?: boolean;
   startBinding?: { elementId: string };
   endBinding?: { elementId: string };
+  /** Layer number, written by a layer change (see layers.ts). Absent = the element keeps its array slot. */
+  z?: number;
   points: Point[];
 };
 

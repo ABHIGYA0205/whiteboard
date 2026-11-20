@@ -247,7 +247,10 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       : (selectedElementId ? [selectedElementId] : []);
 
     const targetElements = pickSketchElements(elements, activeSelectedIds);
-    const isClusterUsed = activeSelectedIds.length === 0 && targetElements.length > 0;
+    // The cluster rule was used when the sketch is not (part of) the selection, for example because
+    // only a picture was selected.
+    const selectedIdSet = new Set(activeSelectedIds);
+    const isClusterUsed = targetElements.length > 0 && !targetElements.some((el) => selectedIdSet.has(el.id));
 
     let detectedPrompt = "";
     let sketchBase64: string | undefined = undefined;

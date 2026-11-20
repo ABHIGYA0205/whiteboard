@@ -125,4 +125,41 @@ describe("Step 2 - Client sketch ink and selection", () => {
     const clusterIds = clusterResult.map((el) => el.id).sort();
     assert.deepEqual(clusterIds, ["fig-body", "fig-head"].sort(), "Only stick figure strokes are returned");
   });
+
+  test("pickSketchElements: a selected picture is never the sketch (the new picture is selected right after 'Add to Canvas')", () => {
+    const stroke = (id: string, x: number): WhiteboardElement => ({
+      id,
+      type: "pencil",
+      x,
+      y: 100,
+      width: 40,
+      height: 40,
+      strokeColor: "#000",
+      strokeWidth: 2,
+      points: [{ x, y: 100 }, { x: x + 40, y: 140 }]
+    });
+    const picture: WhiteboardElement = {
+      id: "ai-picture",
+      type: "image",
+      x: 300,
+      y: 100,
+      width: 200,
+      height: 200,
+      strokeColor: "#fff",
+      strokeWidth: 1,
+      imageUrl: "https://example.com/ai.png",
+      points: []
+    };
+    const board = [stroke("head", 100), stroke("body", 120), picture];
+
+    // Only the picture is selected: the drawing next to it is used, exactly as with no selection.
+    assert.deepEqual(pickSketchElements(board, ["ai-picture"]).map((el) => el.id).sort(), ["body", "head"]);
+    assert.deepEqual(pickSketchElements(board, ["ai-picture"]), pickSketchElements(board, []));
+
+    // The picture and one stroke are selected: the selected stroke is used, the picture is not.
+    assert.deepEqual(pickSketchElements(board, ["ai-picture", "head"]).map((el) => el.id), ["head"]);
+
+    // A board with nothing but pictures has no sketch.
+    assert.deepEqual(pickSketchElements([picture], ["ai-picture"]), []);
+  });
 });

@@ -56,6 +56,8 @@ function toBoardDocument(doc: any): BoardDocument {
       isLocked: Boolean(el.isLocked),
       startBinding: el.startBinding,
       endBinding: el.endBinding,
+      // The layer number has to survive storage, or a layer change is lost on the next load.
+      ...(typeof el.z === "number" ? { z: el.z } : {}),
       points: el.points ?? []
     })),
     createdAt: typeof doc.createdAt === "string" ? doc.createdAt : (doc.createdAt?.toISOString?.() || new Date().toISOString()),

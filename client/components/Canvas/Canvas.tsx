@@ -47,11 +47,12 @@ export function Canvas({ collaboration }: CanvasProps) {
     const currentElements = useBoardStore.getState().elements;
 
     // For pure text elements, delete if empty. For sticky notes, retain.
+    // The delete must be a real one (with a tombstone): every keystroke was already sent to the
+    // other users, so just dropping the element here would leave an invisible empty box on their
+    // screens and in storage, from where it would also come back to this screen.
     if (!text.trim() && editingElement.type === "text") {
-      const nextElements = currentElements.filter((e) => e.id !== editingElementId);
-      setElements(nextElements);
-      commitElements(nextElements);
-      collaboration.emitReplace?.(nextElements);
+      const nextElements = useBoardStore.getState().removeElements([editingElement.id]);
+      if (nextElements) collaboration.emitReplace?.(nextElements);
       return;
     }
 
