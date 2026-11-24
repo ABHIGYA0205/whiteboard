@@ -24,6 +24,8 @@ import {
 
 type StoredCursor = CursorPosition & { lastSeen: number };
 
+export type LocalChanges = ReadonlyMap<string, WhiteboardElement | null>;
+
 export type LaserPoint = {
   x: number;
   y: number;
@@ -48,6 +50,10 @@ type BoardState = {
   opacity: number;
   deletedElementIds: Set<string>;
   localEditTimes: Map<string, number>;
+  pendingLocalChanges: LocalChanges;
+  committedVersions: ReadonlyMap<string, number>;
+  deferredCommits: ReadonlyMap<string, WhiteboardElement>;
+  acknowledgeLocalChanges: (sent: LocalChanges) => void;
   /** Elements the local user is actively drawing/dragging right now. */
   activeElementIds: Set<string>;
   selectedElementId: string | null;
@@ -83,11 +89,11 @@ type BoardState = {
     elements: WhiteboardElement[],
     previousElements?: WhiteboardElement[]
   ) => void;
-  loadBoard: (elements: WhiteboardElement[], version?: number) => void;
+  loadBoard: (elements: WhiteboardElement[], version?: number, deletedIds?: string[]) => void;
   replaceElements: (elements: WhiteboardElement[]) => void;
   syncElements: (elements: WhiteboardElement[], version?: number) => void;
   /** Union-merge a remote snapshot. Never deletes local work unless tombstoned. */
-  mergeRemoteElements: (elements: WhiteboardElement[], deletedIds?: string[], version?: number) => void;
+  mergeRemoteElements: (elements: WhiteboardElement[], deletedIds?: string[], version?: number, source?: "snapshot" | "committed") => void;
   /** Marks the element(s) currently under the local pointer. */
   setActiveElementIds: (ids: string[]) => void;
   /** Apply a remote "clear board" without letting old elements merge back in. */
@@ -146,41 +152,47 @@ export function resetUnknownElementWarnings() {
   warnedUnknownElementIds.clear();
 }
 
-/**
- * Records which elements the local user just touched, so an incoming snapshot
- * that is a few hundred ms stale cannot revert a shape they are still moving.
- */
-function markLocalEdits(
-  previous: WhiteboardElement[],
+/** Track locally produced values by id. Socket previews and snapshots bypass this path. */
+function markLocalChanges(
+  state: BoardState,
   next: WhiteboardElement[],
-  times: Map<string, number>
-): Map<string, number> {
-  if (previous === next) return times;
+  tombstones: Set<string> = state.deletedElementIds
+): Pick<BoardState, "localEditTimes" | "pendingLocalChanges"> {
+  const previous = state.elements;
+  if (previous === next && tombstones === state.deletedElementIds) {
+    return { localEditTimes: state.localEditTimes, pendingLocalChanges: state.pendingLocalChanges };
+  }
 
-  // Hot path: this runs on EVERY pointermove while drawing/dragging, so it must
-  // stay allocation-free. Immutable updates give every changed element a new
-  // reference, so reference comparison is enough to spot local edits — a deep
-  // JSON compare here costs ~3.4 ms/frame on a 400-element board.
-  let updated: Map<string, number> | null = null;
+  const localEditTimes = new Map(state.localEditTimes);
+  const pendingLocalChanges = new Map(state.pendingLocalChanges);
+  let beforeById: Map<string, WhiteboardElement> | undefined;
   const now = Date.now();
-
   for (let i = 0; i < next.length; i++) {
     const element = next[i];
-    const before = previous[i];
-    if (before === element && before.id === element.id) continue;
-    if (!updated) updated = new Map(times);
-    updated.set(element.id, now);
-  }
-
-  if (!updated) return times;
-
-  // Keep the map from growing forever.
-  if (updated.size > 2000) {
-    for (const [id, at] of updated) {
-      if (now - at > LOCAL_EDIT_GRACE_MS * 10) updated.delete(id);
+    let before = previous[i];
+    if (beforeById || (before && before.id !== element.id)) {
+      beforeById ??= new Map(previous.map((previousElement) => [previousElement.id, previousElement]));
+      before = beforeById.get(element.id)!;
+    }
+    if (before !== element) {
+      pendingLocalChanges.set(element.id, element);
+      localEditTimes.set(element.id, now);
     }
   }
-  return updated;
+  if (tombstones !== state.deletedElementIds) {
+    for (const id of tombstones) {
+      if (!state.deletedElementIds.has(id)) {
+        pendingLocalChanges.set(id, null);
+        localEditTimes.delete(id);
+      }
+    }
+  }
+  if (localEditTimes.size > 2000) {
+    for (const [id, at] of localEditTimes) {
+      if (now - at > LOCAL_EDIT_GRACE_MS * 10) localEditTimes.delete(id);
+    }
+  }
+  return { localEditTimes, pendingLocalChanges };
 }
 
 /** State update for a local action that ends an undo step. */
@@ -189,12 +201,12 @@ function commitLocal(
   next: WhiteboardElement[],
   tombstones: Set<string> = state.deletedElementIds,
   kind?: string
-): Pick<BoardState, "elements" | "localEditTimes" | "history" | "future"> {
+): Pick<BoardState, "elements" | "localEditTimes" | "pendingLocalChanges" | "history" | "future"> {
   trackLocal(state.elements, next);
   const entry = takeEntry(next, tombstones, kind);
   return {
     elements: next,
-    localEditTimes: markLocalEdits(state.elements, next, state.localEditTimes),
+    ...markLocalChanges(state, next, tombstones),
     history: entry ? pushEntry(state.history, entry) : state.history,
     future: entry ? [] : state.future
   };
@@ -215,7 +227,7 @@ function styleLocal(state: BoardState, patch: Partial<WhiteboardElement>): Parti
 function layerLocal(
   state: BoardState,
   reordered: WhiteboardElement[]
-): { patch: Pick<BoardState, "elements" | "localEditTimes" | "history" | "future">; elements: WhiteboardElement[] } | null {
+): { patch: Pick<BoardState, "elements" | "localEditTimes" | "pendingLocalChanges" | "history" | "future">; elements: WhiteboardElement[] } | null {
   if (reordered.every((element, index) => element === state.elements[index])) return null;
   // First every element gets a number for the place it has NOW. Those numbers depend only on the
   // board, so two users who change layers at the same moment write the same numbers on everything
@@ -254,6 +266,25 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   opacity: 1,
   deletedElementIds: new Set<string>(),
   localEditTimes: new Map<string, number>(),
+  pendingLocalChanges: new Map(),
+  committedVersions: new Map(),
+  deferredCommits: new Map(),
+  acknowledgeLocalChanges: (sent) => {
+    const confirmed: WhiteboardElement[] = [];
+    set((state) => {
+      const pendingLocalChanges = new Map(state.pendingLocalChanges);
+      const deferredCommits = new Map(state.deferredCommits);
+      for (const [id, value] of sent) {
+        if (pendingLocalChanges.get(id) !== value) continue;
+        pendingLocalChanges.delete(id);
+        const element = deferredCommits.get(id);
+        if (element) confirmed.push(element);
+        deferredCommits.delete(id);
+      }
+      return { pendingLocalChanges, deferredCommits };
+    });
+    if (confirmed.length) get().mergeRemoteElements(confirmed, undefined, undefined, "snapshot");
+  },
   activeElementIds: new Set<string>(),
   selectedElementId: null,
   selectedElementIds: [],
@@ -271,7 +302,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   togglePropertiesOpen: () => set((state) => ({ isPropertiesOpen: !state.isPropertiesOpen })),
   setIsLocked: (isLocked) => set({ isLocked }),
   setCurrentUserId: (currentUserId) => set({ currentUserId }),
-  setVersion: (version) => set({ version }),
+  setVersion: (version) => set((state) => version > state.version ? { version } : state),
   setTheme: (theme) =>
     set((state) => {
       let nextStroke = state.strokeColor;
@@ -334,23 +365,29 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       trackLocal(state.elements, elements);
       return {
         elements,
-        localEditTimes: markLocalEdits(state.elements, elements, state.localEditTimes)
+        ...markLocalChanges(state, elements)
       };
     }),
   // The second argument (previousElements) is accepted for the existing call sites and ignored: what
   // the action changed is tracked element by element since its first setElements call.
   commitElements: (elements) => set((state) => commitLocal(state, elements)),
-  loadBoard: (elements, version = 0) => {
+  loadBoard: (elements, version = 0, deletedIds = []) => {
     resetLocalHistory();
     set({
       elements: sortByLayer(elements),
       version,
       history: [],
       future: [],
-      // A fresh authoritative load is the only place tombstones may be dropped.
-      deletedElementIds: new Set<string>(),
+      deletedElementIds: new Set(deletedIds),
       localEditTimes: new Map<string, number>(),
-  activeElementIds: new Set<string>(),
+      pendingLocalChanges: new Map(),
+      committedVersions: new Map(),
+      deferredCommits: new Map(),
+      activeElementIds: new Set<string>(),
+      editingElementId: null,
+      remoteCursors: {},
+      presenceUsers: [],
+      followingUserId: null,
       selectedElementId: null,
       selectedElementIds: []
     });
@@ -361,18 +398,54 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     // silently deleted anything the sender did not know about (a peer's newer
     // stroke, or the stroke you were drawing at that moment). It now merges.
     get().mergeRemoteElements(incomingElements, undefined, version),
-  mergeRemoteElements: (incomingElements, deletedIds, version) =>
+  mergeRemoteElements: (incomingElements, deletedIds, version, source) =>
     set((state) => {
+      let committedVersions = state.committedVersions;
+      let deferredCommits = state.deferredCommits;
+      let incoming = incomingElements;
+      if (source === "committed" && version !== undefined && incoming.length > 0) {
+        const versions = new Map(committedVersions);
+        const deferred = new Map(deferredCommits);
+        incoming = incoming.filter((element) => {
+          if (state.deletedElementIds.has(element.id) || (versions.get(element.id) ?? 0) > version) return false;
+          versions.set(element.id, version);
+          if (state.pendingLocalChanges.has(element.id)) {
+            deferred.set(element.id, element);
+            return false;
+          }
+          return true;
+        });
+        committedVersions = versions;
+        deferredCommits = deferred;
+      }
       const { elements, changed, tombstones } = mergeElementLists({
         local: state.elements,
-        incoming: incomingElements,
+        incoming,
         deletedIds,
         localTombstones: state.deletedElementIds,
         localEditTimes: state.localEditTimes,
         editingElementId: state.editingElementId,
-        activeElementIds: state.activeElementIds,
-        graceMs: LOCAL_EDIT_GRACE_MS
+        activeElementIds: source
+          ? [...state.activeElementIds, ...state.pendingLocalChanges.keys()]
+          : state.activeElementIds,
+        graceMs: source ? 0 : LOCAL_EDIT_GRACE_MS
       });
+
+      const nextVersion = Math.max(state.version, version ?? 0);
+      let pendingLocalChanges = state.pendingLocalChanges;
+      if (deletedIds?.length) {
+        const pending = new Map(pendingLocalChanges);
+        const deferred = new Map(deferredCommits);
+        const versions = new Map(committedVersions);
+        for (const id of deletedIds) {
+          if (pending.get(id)) pending.delete(id);
+          deferred.delete(id);
+          versions.delete(id);
+        }
+        pendingLocalChanges = pending;
+        deferredCommits = deferred;
+        committedVersions = versions;
+      }
 
       // Preserve selection: retain selected element IDs that still exist.
       const nextIdSet = new Set(elements.map((el) => el.id));
@@ -384,14 +457,18 @@ export const useBoardStore = create<BoardState>((set, get) => ({
         ? state.selectedElementId
         : retainedSelectedIds[0] ?? null;
 
-      if (!changed && version === undefined && tombstones.size === state.deletedElementIds.size) {
+      if (!changed && nextVersion === state.version && tombstones.size === state.deletedElementIds.size && pendingLocalChanges === state.pendingLocalChanges
+          && committedVersions === state.committedVersions && deferredCommits === state.deferredCommits) {
         return state;
       }
 
       return {
-        elements,
+        elements: changed ? elements : state.elements,
         deletedElementIds: tombstones,
-        ...(version !== undefined ? { version } : {}),
+        pendingLocalChanges,
+        committedVersions,
+        deferredCommits,
+        version: nextVersion,
         selectedElementId: retainedSelectedId,
         selectedElementIds: retainedSelectedIds
       };
@@ -655,6 +732,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       trackLocal(state.elements, nextElements);
       return {
         elements: nextElements,
+        ...markLocalChanges(state, nextElements, updatedDeleted),
         deletedElementIds: updatedDeleted,
         selectedElementId: null
       };
@@ -695,7 +773,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       return {
         elements: result.elements,
         deletedElementIds: result.tombstones,
-        localEditTimes: markLocalEdits(state.elements, result.elements, state.localEditTimes),
+        ...markLocalChanges(state, result.elements, result.tombstones),
         history: history.slice(0, -1),
         future: open ? [entry] : [entry, ...state.future],
         ...keepSelection(state, result.elements)
@@ -716,7 +794,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       return {
         elements: result.elements,
         deletedElementIds: result.tombstones,
-        localEditTimes: markLocalEdits(state.elements, result.elements, state.localEditTimes),
+        ...markLocalChanges(state, result.elements, result.tombstones),
         history: [...state.history, entry],
         future: remaining,
         ...keepSelection(state, result.elements)
@@ -737,8 +815,8 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       if (state.deletedElementIds.has(element.id)) {
         return state;
       }
-      // If local user is actively typing in this element, preserve local text
-      if (state.editingElementId === element.id) {
+      // Preserve the shape currently under the local pointer or text editor.
+      if (state.activeElementIds.has(element.id) || state.editingElementId === element.id) {
         return state;
       }
       const index = state.elements.findIndex((candidate) => candidate.id === element.id);

@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   mongo:
     image: mongo:7-jammy
     restart: always
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -22,9 +20,22 @@ services:
     ports:
       - "4001:4001"
     environment:
-      - PORT=4001
-      - MONGO_URI=mongodb://mongo:27017/whiteboard
-      - CLIENT_ORIGIN=http://localhost:3000,http://localhost:3001
+      NODE_ENV: production
+      PORT: 4001
+      MONGO_URI: mongodb://mongo:27017/whiteboard
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000,http://localhost:3001}
+      BOARD_SECRET: ${BOARD_SECRET:?Set BOARD_SECRET in the Compose .env file}
+    volumes:
+      - uploads_data:/app/server/uploads
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/health/ready').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
     depends_on:
       mongo:
         condition: service_healthy
@@ -34,14 +45,17 @@ services:
     build:
       context: .
       dockerfile: client/Dockerfile
+      args:
+        INTERNAL_API_URL: http://server:4001
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-}
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:4001
-      - NEXT_PUBLIC_SOCKET_URL=http://localhost:4001
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     restart: always
 
 volumes:
   mongo_data:
+  uploads_data:

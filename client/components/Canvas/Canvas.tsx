@@ -12,6 +12,7 @@ type CollaborationApi = {
   emitDraw: (element: WhiteboardElement) => void;
   emitElementUpdate: (element: WhiteboardElement) => void;
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
+  emitCursorLeave?: () => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
   emitLaser?: (point: { x: number; y: number }, color?: string) => void;
   requestResync?: () => void;
@@ -31,14 +32,14 @@ export function Canvas({ collaboration }: CanvasProps) {
   });
 
   const editingElementId = useBoardStore((state) => state.editingElementId);
-  const elements = useBoardStore((state) => state.elements);
+  const editingElement = useBoardStore((state) => state.editingElementId
+    ? state.elements.find((element) => element.id === state.editingElementId)
+    : undefined);
   const viewport = useBoardStore((state) => state.viewport);
   const theme = useBoardStore((state) => state.theme);
   const setEditingElementId = useBoardStore((state) => state.setEditingElementId);
   const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
-
-  const editingElement = elements.find((el) => el.id === editingElementId);
 
   const handleTextBlur = (text: string) => {
     setEditingElementId(null);
@@ -76,6 +77,7 @@ export function Canvas({ collaboration }: CanvasProps) {
   };
 
   const handleDoubleClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (useBoardStore.getState().isLocked) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -83,7 +85,7 @@ export function Canvas({ collaboration }: CanvasProps) {
     const y = (event.clientY - rect.top - viewport.y) / viewport.zoom;
 
     // Double click to edit text on any shape, sticky note, or text element
-    const clickedElement = [...elements].reverse().find((el) => {
+    const clickedElement = [...useBoardStore.getState().elements].reverse().find((el) => {
       const b = getNormalizedBounds(el);
       return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height;
     });
@@ -102,6 +104,7 @@ export function Canvas({ collaboration }: CanvasProps) {
   // F1.4: Drag and drop image file onto canvas
   const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    if (useBoardStore.getState().isLocked) return;
     const file = event.dataTransfer.files?.[0];
     if (!file || !file.type.startsWith("image/")) return;
 
@@ -137,7 +140,7 @@ export function Canvas({ collaboration }: CanvasProps) {
         points: []
       };
 
-      const nextElements = [...elements, imgEl];
+      const nextElements = [...useBoardStore.getState().elements, imgEl];
       commitElements(nextElements);
       collaboration.emitDraw(imgEl);
     };
@@ -147,6 +150,7 @@ export function Canvas({ collaboration }: CanvasProps) {
   // F1.4: Clipboard paste image directly from clipboard
   useEffect(() => {
     const handlePaste = async (event: ClipboardEvent) => {
+      if (useBoardStore.getState().isLocked) return;
       const items = event.clipboardData?.items;
       if (!items) return;
 
@@ -212,7 +216,10 @@ export function Canvas({ collaboration }: CanvasProps) {
         onPointerMove={canvas.handlePointerMove}
         onPointerUp={canvas.handlePointerUp}
         onPointerCancel={canvas.handlePointerUp}
-        onPointerLeave={canvas.handlePointerUp}
+        onPointerLeave={(event) => {
+          collaboration.emitCursorLeave?.();
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) canvas.handlePointerUp(event);
+        }}
         onDoubleClick={handleDoubleClick}
         onWheel={canvas.handleWheel}
         ref={canvasRef}

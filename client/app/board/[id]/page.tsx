@@ -5,11 +5,11 @@ import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { PropertiesPanel } from "@/components/PropertiesPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { clearBoardRemote, deleteBoardRemote, getBoard, saveBoard, saveBoardDelta, claimBoard } from "@/lib/api";
+import { deleteBoardRemote, getBoard, saveBoardChanges, claimBoard } from "@/lib/api";
 import { getToken, setToken, decodeRole } from "@/lib/boardAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useBoardStore } from "@/store/boardStore";
-import { useEffect, useRef, useState } from "react";
+import { use, useEffect, useState } from "react";
 import type { PresenceUser, WhiteboardElement } from "@shared/types";
 import { ShortcutsModal } from "@/components/Modals/ShortcutsModal";
 import { ShareModal } from "@/components/Modals/ShareModal";
@@ -32,17 +32,12 @@ import {
 } from "lucide-react";
 
 type BoardPageProps = {
-  params: {
-    id: string;
-  };
+  params: Promise<{ id: string }>;
 };
 
 export default function BoardPage({ params }: BoardPageProps) {
-  const boardId = params.id;
-  const elements = useBoardStore((state) => state.elements);
+  const { id: boardId } = use(params);
   const resetViewport = useBoardStore((state) => state.resetViewport);
-  const version = useBoardStore((state) => state.version);
-  const setVersion = useBoardStore((state) => state.setVersion);
   const loadBoard = useBoardStore((state) => state.loadBoard);
   const restoreElements = useBoardStore((state) => state.restoreElements);
   const clearBoard = useBoardStore((state) => state.clearBoard);
@@ -53,16 +48,17 @@ export default function BoardPage({ params }: BoardPageProps) {
   const viewport = useBoardStore((state) => state.viewport);
   const setZoom = useBoardStore((state) => state.setZoom);
   const presenceUsers = useBoardStore((state) => state.presenceUsers);
-  const remoteCursors = useBoardStore((state) => state.remoteCursors);
   const currentUserId = useBoardStore((state) => state.currentUserId);
   const theme = useBoardStore((state) => state.theme);
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
 
-  const [isLoading, setIsLoading] = useState(true);
+  const [loadedBoardId, setLoadedBoardId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [isViewer, setIsViewer] = useState(false);
   const [isUnauthenticated, setIsUnauthenticated] = useState(false);
   const [pastedLinkInput, setPastedLinkInput] = useState("");
-  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "conflict" | "error">("saved");
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [clearedElementsBackup, setClearedElementsBackup] = useState<WhiteboardElement[] | null>(null);
 
@@ -149,30 +145,23 @@ export default function BoardPage({ params }: BoardPageProps) {
     }
   }, [boardId]);
 
-  // P2-13: Unsaved work guard
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isViewer) return;
-      if (
-        saveStatus === "saving" ||
-        (lastSavedSnapshot.current && JSON.stringify(latestElementsRef.current) !== lastSavedSnapshot.current)
-      ) {
-        e.preventDefault();
-        e.returnValue = "You have unsaved changes.";
-        return e.returnValue;
-      }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (isViewer || useBoardStore.getState().pendingLocalChanges.size === 0) return;
+      event.preventDefault();
+      event.returnValue = "";
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isViewer, saveStatus]);
-
-  const lastSavedSnapshot = useRef("");
-  const savedElementsRef = useRef<Map<string, WhiteboardElement>>(new Map());
-  const latestElementsRef = useRef(elements);
-  const latestVersionRef = useRef(version);
+  }, [isViewer]);
 
   const collaboration = useSocket(boardId, {
-    onJoinDenied: (_code) => {
+    enabled: loadedBoardId === boardId && !isUnauthenticated && !loadError,
+    onJoinDenied: (code) => {
+      if (code === "BOARD_NOT_FOUND") {
+        setLoadError("Board not found.");
+        return;
+      }
       setIsViewer(true);
       setIsLocked(true);
       setIsUnauthenticated(true);
@@ -180,33 +169,31 @@ export default function BoardPage({ params }: BoardPageProps) {
   });
 
   useEffect(() => {
-    latestElementsRef.current = elements;
-  }, [elements]);
-
-  useEffect(() => {
-    latestVersionRef.current = version;
-  }, [version]);
-
-  // Initial load
-  useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    setLoadError(null);
+    setIsUnauthenticated(false);
+    setSaveStatus("saved");
+    setSaveError(null);
+    setClearedElementsBackup(null);
     const load = async () => {
       try {
-        const board = await getBoard(boardId);
-        if (!cancelled) {
-          const currentToken = getToken(boardId);
-          if (!currentToken && board.claimable) {
-            try {
-              await claimBoard(boardId);
-              console.log("claimed this board as owner");
-            } catch (claimErr) {
-              console.warn("Failed to claim board:", claimErr);
+        let board = await getBoard(boardId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!getToken(boardId) && board.claimable) {
+          try {
+            board = (await claimBoard(boardId)).board;
+          } catch (error: any) {
+            if (error?.status === 409) {
+              throw Object.assign(new Error("This board was just claimed."), { status: 401 });
             }
+            throw error;
           }
-
-          loadBoard(board.elements, board.version || 0);
-          lastSavedSnapshot.current = JSON.stringify(board.elements);
-          savedElementsRef.current = new Map(board.elements.map((element) => [element.id, element]));
+        }
+        if (!controller.signal.aborted) {
+          const isReadOnly = decodeRole(getToken(boardId)) === "viewer";
+          setIsViewer(isReadOnly);
+          setIsLocked(isReadOnly);
+          loadBoard(board.elements, board.version, board.deletedElementIds);
           const savedTitle =
             board.title ||
             (typeof window !== "undefined" ? localStorage.getItem(`whiteboard_title_${boardId}`) : "") ||
@@ -224,140 +211,89 @@ export default function BoardPage({ params }: BoardPageProps) {
           } catch {}
         }
       } catch (error: any) {
-        if (!cancelled) {
-          loadBoard([], 0);
-          if (error?.status === 401) {
-            setIsViewer(true);
-            setIsLocked(true);
-            setIsUnauthenticated(true);
-          } else {
-            console.warn("Could not fetch remote board state, initialized empty canvas:", error);
-          }
+        if (controller.signal.aborted) return;
+        loadBoard([]);
+        if (error?.status === 401) {
+          setIsViewer(true);
+          setIsLocked(true);
+          setIsUnauthenticated(true);
+        } else {
+          setLoadError(error?.status === 404 ? "Board not found." : "Could not load the board. Try again.");
         }
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!controller.signal.aborted) setLoadedBoardId(boardId);
       }
     };
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [boardId, loadBoard, setIsLocked]);
+    return () => controller.abort();
+  }, [boardId, loadAttempt, loadBoard, setIsLocked]);
 
-  // A2.2: Version-aware autosave with conflict resolution (disabled for viewers)
   useEffect(() => {
-    if (isViewer) return;
-    const interval = window.setInterval(async () => {
-      const snapshot = JSON.stringify(latestElementsRef.current);
-      if (snapshot === lastSavedSnapshot.current) return;
+    if (loadedBoardId !== boardId || isViewer || loadError) return;
+    const controller = new AbortController();
+    let saving = false;
+    let retryAt = 0;
+    let retryDelay = 1000;
 
+    const save = async () => {
+      const state = useBoardStore.getState();
+      if (saving || Date.now() < retryAt || state.isLocked || state.pendingLocalChanges.size === 0) return;
+      const changes = new Map(state.pendingLocalChanges);
+      for (const id of state.activeElementIds) {
+        if (changes.get(id)) changes.delete(id);
+      }
+      if (state.editingElementId) changes.delete(state.editingElementId);
+      if (changes.size === 0) return;
+
+      saving = true;
+      setSaveStatus("saving");
       try {
-        setSaveStatus("saving");
-        const localElements = latestElementsRef.current;
-
-        // Upload only what changed (usually one in-progress stroke) instead of
-        // the whole board on every tick.
-        const delta = await saveBoardDelta(
-          boardId,
-          localElements,
-          savedElementsRef.current,
-          Array.from(useBoardStore.getState().deletedElementIds),
-          latestVersionRef.current
-        );
-
-        savedElementsRef.current = new Map(localElements.map((element) => [element.id, element]));
-        lastSavedSnapshot.current = snapshot;
-        setVersion(delta.board.version);
+        const result = await saveBoardChanges(boardId, changes, controller.signal);
+        if (controller.signal.aborted) return;
+        state.mergeRemoteElements(result.elements, result.deletedIds, result.version, "committed");
+        state.acknowledgeLocalChanges(changes);
+        retryDelay = 1000;
         setSaveStatus("saved");
         setSaveError(null);
       } catch (error: any) {
-        if (error?.status === 409) {
-          // The board version drifts as peers edit (and as our own socket events
-          // are persisted), so a stale version is normal, not a real conflict.
-          // Retry the delta once with the fresh version before doing anything
-          // expensive — a full-board upload here would undo the payload win.
-          setSaveStatus("conflict");
-          try {
-            const freshVersion = (await getBoard(boardId)).version;
-            const retried = await saveBoardDelta(
-              boardId,
-              latestElementsRef.current,
-              savedElementsRef.current,
-              Array.from(useBoardStore.getState().deletedElementIds),
-              freshVersion
-            );
-            const localElements = latestElementsRef.current;
-            savedElementsRef.current = new Map(localElements.map((element) => [element.id, element]));
-            lastSavedSnapshot.current = JSON.stringify(localElements);
-            setVersion(retried.board.version);
-            setSaveStatus("saved");
-            setSaveError(null);
-            return;
-          } catch {
-            // fall through to the full union-merge rescue below
-          }
-          try {
-            const fresh = await getBoard(boardId);
-            const currentLocal = latestElementsRef.current;
-            const { deletedElementIds } = useBoardStore.getState();
-
-            // Union merge: server state first (authoritative order), then every
-            // local element the server has not seen yet. The old version also
-            // filtered out anything that had ever been saved before, which
-            // permanently deleted your work whenever a peer's save won the race.
-            const mergedRemoteIds = new Set(fresh.elements.map((el) => el.id));
-            const merged = [
-              ...fresh.elements.filter((el) => !deletedElementIds.has(el.id)),
-              ...currentLocal.filter(
-                (el) => !mergedRemoteIds.has(el.id) && !deletedElementIds.has(el.id)
-              )
-            ];
-
-            loadBoard(merged);
-            latestElementsRef.current = merged;
-            lastSavedSnapshot.current = JSON.stringify(merged);
-            setVersion(fresh.version);
-
-            // Re-save merged state with fresh.version
-            const updated = await saveBoard(
-              boardId,
-              merged,
-              fresh.version,
-              Array.from(deletedElementIds)
-            );
-            savedElementsRef.current = new Map(merged.map((element) => [element.id, element]));
-            setVersion(updated.version);
-            setSaveStatus("saved");
-            setSaveError(null);
-          } catch {
-            setSaveStatus("error");
-          }
-        } else {
-          setSaveStatus("error");
-          setSaveError(error instanceof Error ? error.message : "Auto-save failed.");
+        if (controller.signal.aborted) return;
+        if (error?.status === 401 || error?.status === 403) {
+          setIsViewer(true);
+          setIsLocked(true);
+          setIsUnauthenticated(true);
         }
+        retryAt = Date.now() + Math.max(retryDelay, error?.retryAfterMs ?? 0);
+        retryDelay = Math.min(retryDelay * 2, 15000);
+        setSaveStatus("error");
+        setSaveError(error instanceof Error ? error.message : "Auto-save failed.");
+      } finally {
+        saving = false;
       }
-    }, 4000);
-    return () => window.clearInterval(interval);
-  }, [boardId, loadBoard, setVersion]);
+    };
 
-  // A1.4: Confirm before destructive action + Undo Toast
-  const handleClear = async () => {
-    const prev = [...elements];
+    const interval = window.setInterval(save, 1000);
+    const saveOnReconnect = () => {
+      retryAt = 0;
+      void save();
+    };
+    window.addEventListener("online", saveOnReconnect);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("online", saveOnReconnect);
+    };
+  }, [boardId, loadedBoardId, isViewer, loadError, setIsLocked]);
+
+  const handleClear = () => {
+    const prev = useBoardStore.getState().elements;
+    if (!prev.length) return;
     setClearedElementsBackup(prev);
     clearBoard();
     collaboration.emitClear();
-    try {
-      await clearBoardRemote(boardId);
-      lastSavedSnapshot.current = JSON.stringify([]);
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Failed to clear.");
-    }
   };
 
   const handleDeleteBoard = async () => {
     try {
-      collaboration.emitDeleteBoard();
       await deleteBoardRemote(boardId);
       try {
         const stored = localStorage.getItem("whiteboard_recent_boards");
@@ -367,6 +303,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           localStorage.setItem("whiteboard_recent_boards", JSON.stringify(filtered));
         }
       } catch {}
+      loadBoard([]);
       window.location.href = "/";
     } catch (error) {
       alert("Failed to delete board: " + (error instanceof Error ? error.message : "Network error"));
@@ -422,8 +359,21 @@ export default function BoardPage({ params }: BoardPageProps) {
     onShowShortcuts: () => setIsShortcutsOpen(true)
   });
 
-  if (isLoading) {
+  if (loadedBoardId !== boardId && !loadError) {
     return <main className="status-shell">Loading board...</main>;
+  }
+
+  if (loadError) {
+    return (
+      <main className="status-shell">
+        <p>{loadError}</p>
+        <button type="button" onClick={() => {
+          setLoadedBoardId(null);
+          setLoadError(null);
+          setLoadAttempt((attempt) => attempt + 1);
+        }}>Retry</button>
+      </main>
+    );
   }
 
   return (
@@ -616,9 +566,7 @@ export default function BoardPage({ params }: BoardPageProps) {
       <div className="top-presence-bar">
         {/* Collaborators Avatar Stack (Figma / Canva style) */}
         {(() => {
-          const effectiveSelfId =
-            currentUserId ||
-            (typeof window !== "undefined" ? sessionStorage.getItem("whiteboard_user_id") : null);
+          const effectiveSelfId = currentUserId;
 
           const userMap = new Map<string, PresenceUser>();
 
@@ -631,21 +579,6 @@ export default function BoardPage({ params }: BoardPageProps) {
                 name: isSelf && currentUserName ? currentUserName : (u.name || `User-${u.userId.slice(0, 4)}`),
                 color: u.color || "#6366f1"
               });
-            }
-          }
-
-          // Also incorporate any active live cursors seen on canvas
-          const now = Date.now();
-          for (const cursor of Object.values(remoteCursors)) {
-            if (cursor && cursor.userId && !userMap.has(cursor.userId)) {
-              if (now - (cursor.lastSeen || 0) < 3500) {
-                const isSelf = Boolean(effectiveSelfId) && cursor.userId === effectiveSelfId;
-                userMap.set(cursor.userId, {
-                  userId: cursor.userId,
-                  name: isSelf && currentUserName ? currentUserName : (cursor.name || `User-${cursor.userId.slice(0, 4)}`),
-                  color: cursor.color || "#3b82f6"
-                });
-              }
             }
           }
 

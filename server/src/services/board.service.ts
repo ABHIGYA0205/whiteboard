@@ -15,6 +15,18 @@ export class VersionConflictError extends Error {
 // In-memory store fallback when MongoDB is offline or reconnecting
 const inMemoryBoards = new Map<string, BoardDocument>();
 
+export class BoardStorageUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("Board storage is unavailable. Try again shortly.");
+    this.name = "BoardStorageUnavailableError";
+    if (cause) console.error("Board storage error:", cause);
+  }
+}
+
+function allowMemoryFallback() {
+  if (process.env.NODE_ENV === "production") throw new BoardStorageUnavailableError();
+}
+
 export const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 export function hasValidTokenOwner(ownerId: any): boolean {
@@ -81,8 +93,7 @@ export async function createBoard(
       const existing = await BoardModel.findOne({ id }).lean();
       if (existing) {
         const doc = toBoardDocument(existing);
-        inMemoryBoards.set(id, doc);
-        return { ...doc, ownerToken };
+        return doc;
       }
 
       const board = await BoardModel.create({
@@ -93,16 +104,15 @@ export async function createBoard(
       });
 
       const doc = toBoardDocument(board.toObject());
-      inMemoryBoards.set(id, doc);
       return { ...doc, ownerToken };
-    } catch {
-      // Fallback to in-memory below if Mongo throws
+    } catch (error) {
+      throw new BoardStorageUnavailableError(error);
     }
   }
 
-  // In-memory fallback
+  allowMemoryFallback();
   if (inMemoryBoards.has(id)) {
-    return { ...inMemoryBoards.get(id)!, ownerToken };
+    return toBoardDocument(inMemoryBoards.get(id)!);
   }
 
   const hasTokenOwner = hasValidTokenOwner(effectiveOwnerId);
@@ -124,24 +134,21 @@ export async function claimBoard(id: string): Promise<{ ownerToken: string; boar
   const ownerId = hashToken(ownerToken);
 
   if (isMongoConnected()) {
-    try {
-      const existing = await BoardModel.findOne({ id });
-      if (existing) {
-        if (hasValidTokenOwner(existing.ownerId)) {
-          throw new Error("ALREADY_CLAIMED");
-        }
-        existing.ownerId = ownerId;
-        await existing.save();
-        const doc = toBoardDocument(existing.toObject());
-        inMemoryBoards.set(id, doc);
-        return { ownerToken, board: doc };
-      }
-    } catch (err: any) {
-      if (err.message === "ALREADY_CLAIMED") throw err;
-      // Fall through to in-memory check
-    }
+    // Claiming and editing may run in parallel. Claim only if the owner has not
+    // changed since the read, and never write a stale copy of the elements.
+    const existing = await BoardModel.findOne({ id }).select({ ownerId: 1 }).lean<{ ownerId?: string }>();
+    if (!existing) return null;
+    if (hasValidTokenOwner(existing.ownerId)) throw new Error("ALREADY_CLAIMED");
+    const claimed = await BoardModel.findOneAndUpdate(
+      { id, ownerId: existing.ownerId ?? null },
+      { $set: { ownerId } },
+      { new: true }
+    ).lean();
+    if (!claimed) throw new Error("ALREADY_CLAIMED");
+    return { ownerToken, board: toBoardDocument(claimed) };
   }
 
+  allowMemoryFallback();
   const memoryDoc = inMemoryBoards.get(id);
   if (!memoryDoc) {
     return null;
@@ -164,16 +171,13 @@ export async function getBoard(id: string): Promise<BoardDocument | null> {
   if (isMongoConnected()) {
     try {
       const board = await BoardModel.findOne({ id }).lean();
-      if (board) {
-        const doc = toBoardDocument(board);
-        inMemoryBoards.set(id, doc);
-        return doc;
-      }
-    } catch {
-      // Fall through to in-memory store
+      return board ? toBoardDocument(board) : null;
+    } catch (error) {
+      throw new BoardStorageUnavailableError(error);
     }
   }
 
+  allowMemoryFallback();
   const mem = inMemoryBoards.get(id);
   return mem ? toBoardDocument(mem) : null;
 }
@@ -194,30 +198,86 @@ async function sanitizeElements(elements: WhiteboardElement[]): Promise<Whiteboa
   );
 }
 
-/**
- * A client save is a full snapshot of *that client's* view, which is always
- * slightly behind reality: it does not contain the shape a collaborator drew
- * half a second ago. Blindly $set-ing it therefore erases other people's work.
- * So an incoming save is applied as "upserts + explicit tombstones": anything
- * stored that the payload does not mention, and that was not explicitly
- * deleted, is kept.
- */
+type BoardChanges = Pick<BoardDocument, "elements" | "deletedElementIds">;
+
+/** Apply only named changes, preserving the order of existing element ids. */
 function mergeForStorage(
-  stored: WhiteboardElement[],
+  board: BoardDocument,
   incoming: WhiteboardElement[],
-  deletedIds: Iterable<string>
-): { elements: WhiteboardElement[]; deletedElementIds: string[] } {
-  const deleted = new Set<string>(deletedIds);
-  const incomingIds = new Set(incoming.map((element) => element.id));
+  deletedIds: string[]
+): BoardChanges {
+  const deleted = new Set([...board.deletedElementIds ?? [], ...deletedIds]);
+  const elements = new Map(board.elements.map((element) => [element.id, element]));
+  for (const element of incoming) {
+    if (!deleted.has(element.id)) elements.set(element.id, element);
+  }
+  for (const id of deletedIds) elements.delete(id);
+  return { elements: Array.from(elements.values()), deletedElementIds: Array.from(deleted) };
+}
 
-  const merged = [
-    ...incoming.filter((element) => !deleted.has(element.id)),
-    ...stored.filter(
-      (element) => !incomingIds.has(element.id) && !deleted.has(element.id)
-    )
-  ];
+// Serialize writes to the same board in this server. The version predicate
+// still protects writes when another process updates the Mongo document.
+const boardWrites = new Map<string, Promise<unknown>>();
 
-  return { elements: merged, deletedElementIds: Array.from(deleted) };
+function enqueueBoardWrite<T>(id: string, write: () => Promise<T>): Promise<T> {
+  const result = (boardWrites.get(id) ?? Promise.resolve()).then(write);
+  const settled = result.catch(() => undefined);
+  boardWrites.set(id, settled);
+  void settled.then(() => {
+    if (boardWrites.get(id) === settled) boardWrites.delete(id);
+  });
+  return result;
+}
+
+export class BoardNotFoundError extends Error {
+  constructor() {
+    super("Board not found.");
+    this.name = "BoardNotFoundError";
+  }
+}
+
+async function writeBoard(
+  id: string,
+  expectedVersion: number | undefined,
+  getChanges: (board: BoardDocument) => BoardChanges
+): Promise<BoardDocument> {
+  return enqueueBoardWrite(id, async () => {
+    if (isMongoConnected()) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const existing = await getBoard(id);
+        if (!existing) throw new BoardNotFoundError();
+        if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+          throw new VersionConflictError(existing.version);
+        }
+
+        const updated = await BoardModel.findOneAndUpdate(
+          { id, version: existing.version },
+          { $set: getChanges(existing), $inc: { version: 1 } },
+          { new: true, runValidators: true }
+        ).lean();
+        if (updated) return toBoardDocument(updated);
+      }
+
+      const current = await getBoard(id);
+      if (!current) throw new BoardNotFoundError();
+      throw new VersionConflictError(current.version);
+    }
+
+    allowMemoryFallback();
+    const current = inMemoryBoards.get(id);
+    if (!current) throw new BoardNotFoundError();
+    if (expectedVersion !== undefined && current.version !== expectedVersion) {
+      throw new VersionConflictError(current.version);
+    }
+    const updated = {
+      ...current,
+      ...getChanges(current),
+      version: current.version + 1,
+      updatedAt: new Date().toISOString()
+    };
+    inMemoryBoards.set(id, updated);
+    return toBoardDocument(updated);
+  });
 }
 
 export async function updateBoard(
@@ -227,106 +287,8 @@ export async function updateBoard(
   deletedIds: Iterable<string> = []
 ): Promise<BoardDocument> {
   const sanitized = await sanitizeElements(elements);
-  const incomingDeleted = Array.from(deletedIds);
-
-  if (isMongoConnected()) {
-    try {
-      if (expectedVersion !== undefined) {
-        const existing: any = await BoardModel.findOne({ id }).lean();
-        if (existing && existing.version !== expectedVersion) {
-          throw new VersionConflictError(existing.version);
-        }
-
-        const stored: any[] = (existing?.elements as any[]) || [];
-        const { elements: mergedElements, deletedElementIds } = mergeForStorage(
-          stored as WhiteboardElement[],
-          sanitized,
-          [...incomingDeleted, ...((existing?.deletedElementIds as string[]) || [])]
-        );
-
-        const board: any = await BoardModel.findOneAndUpdate(
-          { id, version: expectedVersion },
-          { $set: { elements: mergedElements, deletedElementIds }, $inc: { version: 1 } },
-          { new: true, runValidators: true }
-        ).lean();
-
-        if (!board) {
-          const current: any = await BoardModel.findOne({ id }).lean();
-          if (current) {
-            throw new VersionConflictError(current.version);
-          }
-          const created = await BoardModel.create({
-            id,
-            version: 1,
-            elements: sanitized
-          });
-          const doc = toBoardDocument(created.toObject());
-          inMemoryBoards.set(id, doc);
-          return doc;
-        }
-
-        const doc = toBoardDocument(board);
-        inMemoryBoards.set(id, doc);
-        return doc;
-      }
-
-      // Without version check, atomic upsert with version increment
-      const existingForMerge: any = await BoardModel.findOne({ id }).lean();
-      const { elements: mergedElements, deletedElementIds } = mergeForStorage(
-        ((existingForMerge?.elements as any[]) || []) as WhiteboardElement[],
-        sanitized,
-        [...incomingDeleted, ...((existingForMerge?.deletedElementIds as string[]) || [])]
-      );
-
-      const board: any = await BoardModel.findOneAndUpdate(
-        { id },
-        { $set: { elements: mergedElements, deletedElementIds }, $inc: { version: 1 } },
-        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
-      ).lean();
-
-      if (!board) {
-        throw new Error("Board could not be updated.");
-      }
-
-      const doc = toBoardDocument(board);
-      inMemoryBoards.set(id, doc);
-      return doc;
-    } catch (err) {
-      if (err instanceof VersionConflictError) throw err;
-      // If Mongo network error, fallback to in-memory store
-    }
-  }
-
-  // In-memory fallback
-  const existingDoc = inMemoryBoards.get(id);
-  const currentDoc: BoardDocument = existingDoc || {
-    id,
-    version: 0,
-    elements: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  if (expectedVersion !== undefined && currentDoc.version !== expectedVersion) {
-    throw new VersionConflictError(currentDoc.version);
-  }
-
-  const { elements: mergedElements, deletedElementIds } = mergeForStorage(
-    currentDoc.elements || [],
-    sanitized,
-    [...incomingDeleted, ...((currentDoc.deletedElementIds as string[]) || [])]
-  );
-
-  const updatedDoc: BoardDocument = {
-    ...currentDoc,
-    elements: mergedElements,
-    deletedElementIds,
-    version: currentDoc.version + 1,
-    updatedAt: new Date().toISOString()
-  };
-
-  inMemoryBoards.set(id, updatedDoc);
-  return updatedDoc;
+  const deletes = Array.from(deletedIds);
+  return writeBoard(id, expectedVersion, (board) => mergeForStorage(board, sanitized, deletes));
 }
 
 export async function applyBoardOps(
@@ -334,98 +296,19 @@ export async function applyBoardOps(
   ops: BoardOp[],
   expectedVersion?: number
 ): Promise<BoardDocument> {
-  if (isMongoConnected()) {
-    try {
-      const board = await BoardModel.findOne({ id });
-      if (board) {
-        if (expectedVersion !== undefined && board.version !== expectedVersion) {
-          throw new VersionConflictError(board.version);
-        }
-
-        let elements: WhiteboardElement[] = (board.elements as unknown as WhiteboardElement[]) || [];
-
-        for (const op of ops) {
-          let sanitizedElement = op.element;
-          if (sanitizedElement.type === "image" && sanitizedElement.imageUrl?.startsWith("data:")) {
-            const url = await saveBase64Image(sanitizedElement.imageUrl);
-            sanitizedElement = { ...sanitizedElement, imageUrl: url };
-          }
-
-          const idx = elements.findIndex((el) => el.id === sanitizedElement.id);
-          if (op.op === "add" || op.op === "update") {
-            if (idx >= 0) {
-              elements[idx] = sanitizedElement;
-            } else {
-              elements.push(sanitizedElement);
-            }
-          } else if (op.op === "delete") {
-            elements = elements.filter((el) => el.id !== sanitizedElement.id);
-          }
-        }
-
-        board.elements = elements as any;
-        board.version = (board.version || 0) + 1;
-        await board.save({ validateBeforeSave: true });
-
-        const doc = toBoardDocument(board.toObject());
-        inMemoryBoards.set(id, doc);
-        return doc;
-      }
-    } catch (err) {
-      if (err instanceof VersionConflictError) throw err;
-      // Fall through to in-memory store
-    }
-  }
-
-  // In-memory fallback
-  const currentDoc = inMemoryBoards.get(id);
-  if (!currentDoc) {
-    throw new Error(`Board ${id} not found.`);
-  }
-
-  if (expectedVersion !== undefined && currentDoc.version !== expectedVersion) {
-    throw new VersionConflictError(currentDoc.version);
-  }
-
-  let elements = [...currentDoc.elements];
-  for (const op of ops) {
-    let sanitizedElement = op.element;
-    if (sanitizedElement.type === "image" && sanitizedElement.imageUrl?.startsWith("data:")) {
-      const url = await saveBase64Image(sanitizedElement.imageUrl);
-      sanitizedElement = { ...sanitizedElement, imageUrl: url };
-    }
-
-    const idx = elements.findIndex((el) => el.id === sanitizedElement.id);
-    if (op.op === "add" || op.op === "update") {
-      if (idx >= 0) {
-        elements[idx] = sanitizedElement;
-      } else {
-        elements.push(sanitizedElement);
-      }
-    } else if (op.op === "delete") {
-      elements = elements.filter((el) => el.id !== sanitizedElement.id);
-    }
-  }
-
-  const updatedDoc: BoardDocument = {
-    ...currentDoc,
-    elements,
-    version: currentDoc.version + 1,
-    updatedAt: new Date().toISOString()
-  };
-
-  inMemoryBoards.set(id, updatedDoc);
-  return updatedDoc;
+  const elements = await sanitizeElements(ops.filter(({ op }) => op !== "delete").map(({ element }) => element));
+  const deletedIds = ops.filter(({ op }) => op === "delete").map(({ element }) => element.id);
+  return writeBoard(id, expectedVersion, (board) => mergeForStorage(board, elements, deletedIds));
 }
 
-export async function deleteBoard(id: string): Promise<boolean> {
-  if (isMongoConnected()) {
-    try {
+export function deleteBoard(id: string): Promise<boolean> {
+  return enqueueBoardWrite(id, async () => {
+    if (isMongoConnected()) {
       await BoardModel.deleteOne({ id });
-    } catch {
-      // fallback to memory
+    } else {
+      allowMemoryFallback();
     }
-  }
-  inMemoryBoards.delete(id);
-  return true;
+    inMemoryBoards.delete(id);
+    return true;
+  });
 }

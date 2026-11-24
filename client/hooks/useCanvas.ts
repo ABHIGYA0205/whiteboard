@@ -49,8 +49,8 @@ type CollaborationApi = {
 };
 
 type UseCanvasOptions = {
-  canvasRef: RefObject<HTMLCanvasElement>;
-  containerRef: RefObject<HTMLDivElement>;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  containerRef: RefObject<HTMLDivElement | null>;
   collaboration: CollaborationApi;
 };
 
@@ -110,7 +110,6 @@ export function useCanvas({
   containerRef,
   collaboration
 }: UseCanvasOptions) {
-  const elements = useBoardStore((state) => state.elements);
   const selectedElementId = useBoardStore((state) => state.selectedElementId);
   const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const tool = useBoardStore((state) => state.tool);
@@ -122,7 +121,6 @@ export function useCanvas({
   const roughness = useBoardStore((state) => state.roughness);
   const roundness = useBoardStore((state) => state.roundness);
   const opacity = useBoardStore((state) => state.opacity);
-  const viewport = useBoardStore((state) => state.viewport);
   const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
   const selectElement = useBoardStore((state) => state.selectElement);
@@ -137,16 +135,19 @@ export function useCanvas({
     id: null
   });
   const devicePixelRatioRef = useRef(1);
-  const elementsRef = useRef(elements);
-  const viewportRef = useRef(viewport);
+  const frameRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    elementsRef.current = elements;
-  }, [elements]);
-
-  useEffect(() => {
-    viewportRef.current = viewport;
-  }, [viewport]);
+  function scheduleRender() {
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      render();
+      if (useBoardStore.getState().laserPoints.length) {
+        useBoardStore.getState().clearExpiredLaserPoints();
+        if (useBoardStore.getState().laserPoints.length) scheduleRender();
+      }
+    });
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -164,7 +165,7 @@ export function useCanvas({
       canvas.height = rect.height * ratio;
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
-      render();
+      scheduleRender();
     };
 
     resizeCanvas();
@@ -175,18 +176,23 @@ export function useCanvas({
     return () => observer.disconnect();
   }, [canvasRef, containerRef]);
 
-  const theme = useBoardStore((state) => state.theme);
   const activePointersRef = useRef<Map<number, Point>>(new Map());
 
   useEffect(() => {
-    render();
-  }, [elements, selectedElementId, selectedElementIds, viewport, theme]);
-
-  // Re-render when async images finish loading
-  useEffect(() => {
-    const onImageLoaded = () => render();
-    window.addEventListener("image-loaded", onImageLoaded);
-    return () => window.removeEventListener("image-loaded", onImageLoaded);
+    const unsubscribe = useBoardStore.subscribe((state, previous) => {
+      if (state.elements !== previous.elements || state.viewport !== previous.viewport ||
+          state.selectedElementIds !== previous.selectedElementIds || state.tool !== previous.tool ||
+          state.theme !== previous.theme || state.laserPoints !== previous.laserPoints) {
+        scheduleRender();
+      }
+    });
+    window.addEventListener("image-loaded", scheduleRender);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("image-loaded", scheduleRender);
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    };
   }, []);
 
   const render = () => {
@@ -197,8 +203,8 @@ export function useCanvas({
       return;
     }
 
-    const currentElements = elementsRef.current;
-    const currentViewport = viewportRef.current;
+    const { elements: currentElements, viewport: currentViewport, tool, theme, selectedElementId, selectedElementIds } =
+      useBoardStore.getState();
     const ratio = devicePixelRatioRef.current;
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -260,22 +266,9 @@ export function useCanvas({
     context.restore();
   };
 
-  useEffect(() => {
-    let animId: number;
-    const tick = () => {
-      if (useBoardStore.getState().laserPoints.length > 0) {
-        useBoardStore.getState().clearExpiredLaserPoints();
-        render();
-      }
-      animId = requestAnimationFrame(tick);
-    };
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
-  }, []);
-
   const getCanvasPoint = (event: PointerEvent | ReactPointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
-    const currentViewport = viewportRef.current;
+    const currentViewport = useBoardStore.getState().viewport;
 
     if (!rect) {
       return { x: 0, y: 0 };
@@ -298,17 +291,18 @@ export function useCanvas({
     if (activePointersRef.current.size >= 2) {
       // If we were drawing a draft stroke with the first touch, cancel and discard it!
       if (interactionRef.current.mode === "drawing") {
-        const prev = interactionRef.current.previousElements;
-        setElements(prev);
-        elementsRef.current = prev;
+        const state = useBoardStore.getState();
+        const remaining = state.removeElements([interactionRef.current.elementId]);
+        if (remaining) collaboration.emitReplace?.(remaining);
       }
 
+      useBoardStore.getState().setActiveElementIds([]);
       const pts = Array.from(activePointersRef.current.values());
       const p1 = pts[0];
       const p2 = pts[1];
       const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
       const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-      const currentViewport = viewportRef.current;
+      const currentViewport = useBoardStore.getState().viewport;
 
       interactionRef.current = {
         mode: "pinch-pan",
@@ -321,15 +315,11 @@ export function useCanvas({
     }
 
     const point = getCanvasPoint(event);
-    const currentElements = elementsRef.current;
-    const currentViewport = viewportRef.current;
+    const currentElements = useBoardStore.getState().elements;
+    const currentViewport = useBoardStore.getState().viewport;
     const activeElement = [...currentElements]
       .reverse()
       .find((element) => hitTestElement(point, element));
-
-    // Tell the collaboration layer which element is under the pointer, so an
-    // incoming snapshot can never revert the shape being dragged/resized now.
-    useBoardStore.getState().setActiveElementIds(activeElement ? [activeElement.id] : []);
 
     if (event.button === 1 || event.button === 2 || (event.shiftKey && tool === "pan") || tool === "pan") {
       interactionRef.current = {
@@ -352,15 +342,13 @@ export function useCanvas({
         if (groupBounds) {
           const groupHandle = getBoundingBoxResizeHandleAtPoint(point, groupBounds);
           if (groupHandle) {
+            useBoardStore.getState().setActiveElementIds(selectedElementIds);
             interactionRef.current = {
               mode: "resizing-group",
               elementIds: [...selectedElementIds],
               handle: groupHandle,
               initialBounds: groupBounds,
-              initialElements: currentElements.map((el) => ({
-                ...el,
-                points: el.points ? [...el.points] : []
-              })),
+              initialElements: selectedEls,
               hasMoved: false,
               previousElements: currentElements
             };
@@ -375,6 +363,7 @@ export function useCanvas({
         if (currentlySelected) {
           const handle = getResizeHandleAtPoint(point, currentlySelected);
           if (handle) {
+            useBoardStore.getState().setActiveElementIds([currentlySelected.id]);
             interactionRef.current = {
               mode: "resizing",
               elementId: currentlySelected.id,
@@ -416,6 +405,7 @@ export function useCanvas({
             ? selectedElementIds.filter((id) => id !== activeElement.id)
             : [...selectedElementIds, activeElement.id];
           selectElement(nextIds);
+          useBoardStore.getState().setActiveElementIds(nextIds);
           interactionRef.current = {
             mode: "dragging",
             elementIds: nextIds,
@@ -441,6 +431,7 @@ export function useCanvas({
           const nextElements = [...currentElements, ...clones];
           setElements(nextElements);
           selectElement(cloneIds);
+          useBoardStore.getState().setActiveElementIds(cloneIds);
           interactionRef.current = {
             mode: "dragging",
             elementIds: cloneIds,
@@ -453,6 +444,7 @@ export function useCanvas({
 
         // Click on element: if already in selection, keep multi-selection for group drag!
         if (selectedElementIds.includes(activeElement.id)) {
+          useBoardStore.getState().setActiveElementIds(selectedElementIds);
           interactionRef.current = {
             mode: "dragging",
             elementIds: selectedElementIds,
@@ -464,6 +456,7 @@ export function useCanvas({
         }
 
         // Otherwise select only this element
+        useBoardStore.getState().setActiveElementIds([activeElement.id]);
         selectElement(activeElement.id);
         interactionRef.current = {
           mode: "dragging",
@@ -485,7 +478,7 @@ export function useCanvas({
         origin: point,
         current: point
       };
-      render();
+      scheduleRender();
       return;
     }
 
@@ -519,7 +512,7 @@ export function useCanvas({
     if (tool === "laser") {
       useBoardStore.getState().addLaserPoint(point, strokeColor);
       collaboration.emitLaser?.(point, strokeColor);
-      render();
+      scheduleRender();
       return;
     }
 
@@ -551,6 +544,7 @@ export function useCanvas({
         element.startBinding = { elementId: nearShape.id };
       }
     }
+    useBoardStore.getState().setActiveElementIds([element.id]);
     setElements([...currentElements, element]);
     interactionRef.current = {
       mode: "drawing",
@@ -598,22 +592,13 @@ export function useCanvas({
     }
 
     const point = getCanvasPoint(event);
-    const currentElements = elementsRef.current;
-    const currentViewport = viewportRef.current;
-    const currentUserName =
-      typeof window !== "undefined"
-        ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
-        : null;
-    collaboration.emitCursor({
-      x: point.x,
-      y: point.y,
-      name: currentUserName || undefined
-    });
+    const { elements: currentElements, viewport: currentViewport } = useBoardStore.getState();
+    collaboration.emitCursor(point);
 
     if (tool === "laser" && event.buttons > 0) {
       useBoardStore.getState().addLaserPoint(point, strokeColor);
       collaboration.emitLaser?.(point, strokeColor);
-      render();
+      scheduleRender();
       return;
     }
 
@@ -669,7 +654,7 @@ export function useCanvas({
             height: element.height
           });
         } else {
-          collaboration.emitDraw(element);
+          collaboration.emitElementUpdate(element);
         }
       }
       return;
@@ -693,7 +678,7 @@ export function useCanvas({
           .map((el) => el.id);
         selectElement(matched);
       }
-      render();
+      scheduleRender();
       return;
     }
 
@@ -742,13 +727,7 @@ export function useCanvas({
         ...interaction,
         origin: point
       };
-      const updatedElements = nextElements.filter(
-        (candidate) =>
-          idSet.has(candidate.id) ||
-          (candidate.type === "arrow" &&
-            ((candidate.startBinding && idSet.has(candidate.startBinding.elementId)) ||
-              (candidate.endBinding && idSet.has(candidate.endBinding.elementId))))
-      );
+      const updatedElements = nextElements.filter((element, index) => element !== currentElements[index]);
       updatedElements.forEach((el) => collaboration.emitElementUpdate(el));
       return;
     }
@@ -817,15 +796,15 @@ export function useCanvas({
       return;
     }
 
-    if (interactionRef.current.mode === "drawing") {
+    const interaction = interactionRef.current;
+    useBoardStore.getState().setActiveElementIds([]);
+    if (interaction.mode === "drawing") {
       const current = useBoardStore.getState().elements;
-      const drawnEl = current.find(
-        (el) => el.id === (interactionRef.current as any).elementId
-      );
+      let drawnEl = current.find((element) => element.id === interaction.elementId);
       if (drawnEl && (drawnEl.type === "arrow" || drawnEl.type === "line")) {
         const endPoint = { x: drawnEl.x + drawnEl.width, y: drawnEl.y + drawnEl.height };
         const nearShape = current.slice().reverse().find((el) => {
-          if (el.id === drawnEl.id || el.type === "line" || el.type === "arrow" || el.type === "pencil") return false;
+          if (el.id === interaction.elementId || el.type === "line" || el.type === "arrow" || el.type === "pencil") return false;
           const b = getNormalizedBounds(el);
           return (
             endPoint.x >= b.x - 20 &&
@@ -835,10 +814,9 @@ export function useCanvas({
           );
         });
         if (nearShape) {
-          drawnEl.endBinding = { elementId: nearShape.id };
-          const updated = current.map((e) =>
-            e.id === drawnEl.id ? { ...drawnEl, endBinding: { elementId: nearShape.id } } : e
-          );
+          const bound = { ...drawnEl, endBinding: { elementId: nearShape.id } };
+          drawnEl = bound;
+          const updated = current.map((element) => element.id === bound.id ? bound : element);
           useBoardStore.getState().setElements(updated);
         }
       }
@@ -847,48 +825,44 @@ export function useCanvas({
       }
       commitElements(
         useBoardStore.getState().elements,
-        interactionRef.current.previousElements
+        interaction.previousElements
       );
       selectElement(null);
     }
 
     if (
-      (interactionRef.current.mode === "dragging" ||
-        interactionRef.current.mode === "resizing" ||
-        interactionRef.current.mode === "resizing-group") &&
-      interactionRef.current.hasMoved
+      (interaction.mode === "dragging" ||
+        interaction.mode === "resizing" ||
+        interaction.mode === "resizing-group") &&
+      interaction.hasMoved
     ) {
       commitElements(
         useBoardStore.getState().elements,
-        interactionRef.current.previousElements
+        interaction.previousElements
       );
-      if (collaboration.emitReplace) {
-        collaboration.emitReplace(useBoardStore.getState().elements);
-      }
+      collaboration.emitReplace?.(useBoardStore.getState().elements);
     }
 
-    if (interactionRef.current.mode === "box-selecting") {
-      render();
+    if (interaction.mode === "box-selecting") {
+      scheduleRender();
     }
 
-    if (interactionRef.current.mode === "erasing") {
+    if (interaction.mode === "erasing") {
       const nextElements = useBoardStore.getState().elements;
       commitElements(
         nextElements,
-        interactionRef.current.previousElements
+        interaction.previousElements
       );
-      if (collaboration.emitReplace) {
-        collaboration.emitReplace(nextElements);
-      }
+      collaboration.emitReplace?.(nextElements);
     }
 
-    useBoardStore.getState().setActiveElementIds([]);
     interactionRef.current = { mode: "idle" };
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
     event.preventDefault();
 
+    const { viewport } = useBoardStore.getState();
     const zoomDelta = event.deltaY < 0 ? ZOOM_IN_FACTOR : ZOOM_OUT_FACTOR;
     const nextZoom = Math.min(4, Math.max(0.2, viewport.zoom * zoomDelta));
     const rect = canvasRef.current?.getBoundingClientRect();

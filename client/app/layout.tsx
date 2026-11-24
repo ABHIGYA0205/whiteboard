@@ -2,9 +2,6 @@ import "@/styles/globals.css";
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import fs from "node:fs";
-import path from "node:path";
-
 export const metadata: Metadata = {
   title: "Canvas Flow",
   description: "Ultra-fast infinite collaborative whiteboard with live multi-user drawing, AI diagrams, and vector studio tools.",
@@ -26,26 +23,7 @@ export const viewport: Viewport = {
   themeColor: "#010409"
 };
 
-function getInlineStyles(): string {
-  try {
-    const candidatePaths = [
-      path.join(process.cwd(), "styles", "globals.css"),
-      path.join(process.cwd(), "client", "styles", "globals.css")
-    ];
-    for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
-        return fs.readFileSync(p, "utf8");
-      }
-    }
-  } catch {
-    // fallback if file read fails
-  }
-  return "";
-}
-
 export default function RootLayout({ children }: { children: ReactNode }) {
-  const inlineStyles = getInlineStyles();
-
   return (
     <html
       lang="en"
@@ -68,12 +46,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="icon" href="/icon.png?v=cf3" type="image/png" sizes="64x64" />
         <link rel="icon" href="/icon.svg?v=cf3" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="/icon.png?v=cf3" />
-        {inlineStyles ? (
-          <style
-            id="whiteboard-core-styles"
-            dangerouslySetInnerHTML={{ __html: inlineStyles }}
-          />
-        ) : null}
       </head>
       <body
         style={{

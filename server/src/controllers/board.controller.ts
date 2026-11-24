@@ -9,7 +9,9 @@ import {
   applyBoardOps,
   claimBoard,
   hasValidTokenOwner,
-  VersionConflictError
+  VersionConflictError,
+  BoardNotFoundError,
+  BoardStorageUnavailableError
 } from "../services/board.service";
 import {
   saveBase64Image,
@@ -19,7 +21,9 @@ import {
 } from "../utils/storage";
 import { signBoardToken, verifyBoardToken, BoardRole } from "../utils/token";
 import { env } from "../utils/env";
-import type { BoardDocument } from "@shared/types";
+import type { BoardDocument, BoardOp } from "@shared/types";
+import { isBoardElement, isElementId } from "../utils/boardPayload";
+import { publishBoardClaim, publishBoardDeletion, publishBoardUpdate } from "../sockets/board.socket";
 
 function getParamId(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -104,6 +108,28 @@ async function authorizeBoard(
   return { ok: true, board, role: verified.payload.role };
 }
 
+function handleBoardError(response: Response, error: unknown): boolean {
+  if (error instanceof VersionConflictError) {
+    response.status(409).json({ error: error.message, currentVersion: error.currentVersion });
+  } else if (error instanceof BoardStorageUnavailableError) {
+    response.status(503).json({ error: error.message });
+  } else if (error instanceof BoardNotFoundError) {
+    response.status(404).json({ error: error.message });
+  } else if (error instanceof Error && error.name === "ValidationError") {
+    response.status(400).json({ error: error.message });
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function isBoardOp(value: unknown): value is BoardOp {
+  if (!value || typeof value !== "object") return false;
+  const { op, element } = value as BoardOp;
+  if (op === "delete") return isElementId(element?.id);
+  return (op === "add" || op === "update") && isBoardElement(element);
+}
+
 export async function createBoardController(request: Request, response: Response) {
   try {
     let legacyOwnerId: string | undefined;
@@ -118,6 +144,7 @@ export async function createBoardController(request: Request, response: Response
     const board = await createBoard(undefined, legacyOwnerId);
     response.status(201).json(board);
   } catch (error) {
+    if (handleBoardError(response, error)) return;
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to create board."
     });
@@ -134,6 +161,7 @@ export async function getBoardController(request: Request, response: Response) {
 
     response.json(auth.board);
   } catch (error) {
+    if (handleBoardError(response, error)) return;
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to load board."
     });
@@ -150,8 +178,9 @@ export async function updateBoardController(request: Request, response: Response
 
     const { elements, version, deletedIds } = request.body;
 
-    if (!Array.isArray(elements)) {
-      response.status(400).json({ error: "elements array is required." });
+    if (!Array.isArray(elements) || !elements.every(isBoardElement) ||
+        (deletedIds !== undefined && (!Array.isArray(deletedIds) || !deletedIds.every(isElementId)))) {
+      response.status(400).json({ error: "Valid board elements and deletion ids are required." });
       return;
     }
 
@@ -161,21 +190,11 @@ export async function updateBoardController(request: Request, response: Response
       typeof version === "number" ? version : undefined,
       Array.isArray(deletedIds) ? deletedIds : []
     );
+    const io = request.app.get("socket.io");
+    if (io) publishBoardUpdate(io, board, [...elements.map(({ id }) => id), ...deletedIds ?? []]);
     response.json(board);
-  } catch (error: any) {
-    if (error instanceof VersionConflictError) {
-      response.status(409).json({
-        error: error.message,
-        currentVersion: error.currentVersion
-      });
-      return;
-    }
-
-    if (error?.name === "ValidationError") {
-      response.status(400).json({ error: error.message });
-      return;
-    }
-
+  } catch (error) {
+    if (handleBoardError(response, error)) return;
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to update board."
     });
@@ -197,8 +216,8 @@ export async function applyBoardOpsController(request: Request, response: Respon
       opList = [{ op, element }];
     }
 
-    if (!Array.isArray(opList) || opList.length === 0) {
-      response.status(400).json({ error: "ops array or single op+element required." });
+    if (!Array.isArray(opList) || opList.length === 0 || !opList.every(isBoardOp)) {
+      response.status(400).json({ error: "Valid ops array or single op and element required." });
       return;
     }
 
@@ -207,21 +226,16 @@ export async function applyBoardOpsController(request: Request, response: Respon
       opList,
       typeof version === "number" ? version : undefined
     );
-    response.json(board);
-  } catch (error: any) {
-    if (error instanceof VersionConflictError) {
-      response.status(409).json({
-        error: error.message,
-        currentVersion: error.currentVersion
-      });
-      return;
-    }
-
-    if (error?.name === "ValidationError") {
-      response.status(400).json({ error: error.message });
-      return;
-    }
-
+    const ids = new Set<string>(opList.map(({ element }: BoardOp) => element.id));
+    const io = request.app.get("socket.io");
+    if (io) publishBoardUpdate(io, board, ids);
+    response.json(request.query.compact === "1" ? {
+      version: board.version,
+      elements: board.elements.filter(({ id }) => ids.has(id)),
+      deletedIds: board.deletedElementIds?.filter((id) => ids.has(id)) ?? []
+    } : board);
+  } catch (error) {
+    if (handleBoardError(response, error)) return;
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to apply operations."
     });
@@ -236,8 +250,11 @@ export async function claimBoardController(request: Request, response: Response)
       response.status(404).json({ error: "Board not found." });
       return;
     }
+    const io = request.app.get("socket.io");
+    if (io) publishBoardClaim(io, boardId);
     response.json(result);
   } catch (error: any) {
+    if (handleBoardError(response, error)) return;
     if (error?.message === "ALREADY_CLAIMED") {
       response.status(409).json({ error: "Board is already claimed.", code: "ALREADY_CLAIMED" });
       return;
@@ -358,8 +375,11 @@ export async function deleteBoardController(request: Request, response: Response
     }
 
     await deleteBoard(boardId);
+    const io = request.app.get("socket.io");
+    if (io) publishBoardDeletion(io, boardId);
     response.json({ success: true, message: `Board ${boardId} deleted.` });
   } catch (error) {
+    if (handleBoardError(response, error)) return;
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to delete board."
     });

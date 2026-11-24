@@ -20,10 +20,18 @@ function base64UrlDecode(str: string): string {
   return "";
 }
 
+const tabTokens = new Map<string, string>();
+const roleRank = { viewer: 1, editor: 2, owner: 3 };
+
 export function getToken(boardId: string): string | null {
   if (typeof window === "undefined" || !boardId) return null;
+  const active = tabTokens.get(boardId);
+  if (active) return active;
   try {
-    return localStorage.getItem(`canvasflow:token:${boardId}`);
+    const key = `canvasflow:token:${boardId}`;
+    const token = sessionStorage.getItem(key) || localStorage.getItem(key);
+    if (token) tabTokens.set(boardId, token);
+    return token;
   } catch {
     return null;
   }
@@ -31,19 +39,32 @@ export function getToken(boardId: string): string | null {
 
 export function setToken(boardId: string, token: string): void {
   if (typeof window === "undefined" || !boardId || !token) return;
+  tabTokens.set(boardId, token);
   try {
-    localStorage.setItem(`canvasflow:token:${boardId}`, token);
+    const key = `canvasflow:token:${boardId}`;
+    sessionStorage.setItem(key, token);
+    // Follow the share link's role in this tab. Keep the strongest reusable
+    // credential for new tabs opened from the dashboard.
+    const role = decodeRole(token);
+    const storedRole = decodeRole(localStorage.getItem(key));
+    if (role && (!storedRole || roleRank[role] >= roleRank[storedRole])) {
+      localStorage.setItem(key, token);
+    }
   } catch {
-    // localStorage might be unavailable/restricted in some environments
+    // The current document can still use the in-memory token.
   }
 }
 
 export function clearToken(boardId: string): void {
   if (typeof window === "undefined" || !boardId) return;
+  const active = getToken(boardId);
+  tabTokens.delete(boardId);
   try {
-    localStorage.removeItem(`canvasflow:token:${boardId}`);
+    const key = `canvasflow:token:${boardId}`;
+    sessionStorage.removeItem(key);
+    if (localStorage.getItem(key) === active) localStorage.removeItem(key);
   } catch {
-    // ignore
+    // Browser storage may be unavailable.
   }
 }
 

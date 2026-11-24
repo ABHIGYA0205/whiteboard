@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 
 const WIDTHS = [320, 390, 480, 768, 820, 1024, 1280, 1440];
 const HEIGHT = 844;
+const API_URL = process.env.API_URL || "http://127.0.0.1:4001";
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
 function boxesIntersect(a, b) {
@@ -32,8 +33,10 @@ async function runChecks() {
     });
 
     const page = await context.newPage();
-    const boardId = `test-resp-${width}-${Date.now()}`;
-    await page.goto(`${BASE_URL}/board/${boardId}`, { waitUntil: "networkidle" });
+    const response = await fetch(`${API_URL}/board`, { method: "POST" });
+    if (!response.ok) throw new Error(`Board setup failed (${response.status})`);
+    const { id, ownerToken } = await response.json();
+    await page.goto(`${BASE_URL}/board/${id}?share=${encodeURIComponent(ownerToken)}`, { waitUntil: "networkidle" });
 
     // Wait for canvas shell and toolbar to mount
     await page.waitForSelector(".top-toolbar", { timeout: 10000 });

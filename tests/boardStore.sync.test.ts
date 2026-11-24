@@ -78,3 +78,40 @@ test("undo restores a deleted element under a new id and the old id stays delete
   assert.equal(useBoardStore.getState().elements.length, 2);
   assert.ok(!ids().includes("b"));
 });
+
+test("autosave tracks local edits only and keeps a newer edit while an older request completes", () => {
+  const state = useBoardStore.getState;
+  state().loadBoard([el("own"), el("peer")]);
+  state().upsertRemoteElement(el("peer", 10));
+  assert.equal(state().pendingLocalChanges.size, 0);
+
+  state().setElements([el("own", 20), state().elements[1]]);
+  const sent = state().pendingLocalChanges;
+  state().setElements([el("own", 30), state().elements[1]]);
+  state().acknowledgeLocalChanges(sent);
+  assert.deepEqual([...state().pendingLocalChanges.keys()], ["own"]);
+  assert.equal(state().pendingLocalChanges.get("own")?.x, 30);
+});
+
+test("a delayed autosave response cannot undo the latest committed version of an element", () => {
+  const state = useBoardStore.getState;
+  state().loadBoard([el("shared")]);
+  state().setElements([el("shared", 10)]);
+  const sent = state().pendingLocalChanges;
+  state().mergeRemoteElements([el("shared", 30)], [], 3, "committed");
+  state().mergeRemoteElements([el("shared", 10)], [], 2, "committed");
+  state().acknowledgeLocalChanges(sent);
+  assert.equal(state().elements[0].x, 30);
+  assert.equal(state().version, 3);
+  assert.equal(state().pendingLocalChanges.size, 0);
+});
+
+test("explicit remote deletions remove pending updates and never become local saves", () => {
+  const state = useBoardStore.getState;
+  state().loadBoard([el("shared")], 1);
+  state().setElements([el("shared", 10)]);
+  state().mergeRemoteElements([], ["shared"], 2, "committed");
+  assert.equal(state().elements.length, 0);
+  assert.equal(state().pendingLocalChanges.size, 0);
+  assert.ok(state().deletedElementIds.has("shared"));
+});

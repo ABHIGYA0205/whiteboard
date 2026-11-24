@@ -54,13 +54,12 @@ async function ensureMongo() {
 }
 
 async function ensureServer() {
-  await ensureMongo();
-
   try {
-    const res = await fetch(`${API}/health`);
+    const res = await fetch(`${API}/health/ready`);
     if (res.ok) return;
   } catch {}
 
+  await ensureMongo();
   console.log("Starting backend server for test...");
   serverProcess = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: "server",

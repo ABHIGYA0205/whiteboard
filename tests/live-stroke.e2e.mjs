@@ -20,16 +20,16 @@ if (!boardRes.ok) {
   console.error("Failed to create board:", await boardRes.text());
   process.exit(1);
 }
-const board = (await boardRes.json()).id;
+const { id: board, ownerToken: token } = await boardRes.json();
 
 // Client A (drawer) and Client B (peer) join the board
 const clientA = io(API, { transports: ["websocket"], auth: { userId: "drawer-a" } });
 await new Promise((r) => clientA.on("connect", r));
-clientA.emit("join-board", { boardId: board, userName: "drawer-a" });
+clientA.emit("join-board", { boardId: board, token, userName: "drawer-a" });
 
 const clientB = io(API, { transports: ["websocket"], auth: { userId: "peer-b" } });
 await new Promise((r) => clientB.on("connect", r));
-clientB.emit("join-board", { boardId: board, userName: "peer-b" });
+clientB.emit("join-board", { boardId: board, token, userName: "peer-b" });
 
 await sleep(300);
 
@@ -99,7 +99,7 @@ await new Promise((r) => clientC.on("connect", r));
 
 const state = await new Promise((res) => {
   clientC.once("board:state", res);
-  clientC.emit("join-board", { boardId: board, userName: "late-c" });
+  clientC.emit("join-board", { boardId: board, token, userName: "late-c" });
 });
 
 const mirroredStroke = state?.elements?.find((e) => e.id === strokeId);

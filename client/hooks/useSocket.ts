@@ -3,449 +3,286 @@
 import { useBoardStore, registerResyncHandler } from "@/store/boardStore";
 import { getToken } from "@/lib/boardAuth";
 import type {
-  CursorPosition,
-  DrawEventPayload,
-  DrawProgressPayload,
-  PresenceUser,
-  UpdateElementPayload,
-  WhiteboardElement
+  CursorPosition, DrawEventPayload, DrawProgressPayload, Point, PresenceUser, WhiteboardElement
 } from "@shared/types";
 import type { Socket } from "socket.io-client";
 import { useEffect, useMemo, useRef } from "react";
 
-const THROTTLE_MS = 16;
 const getSocketUrl = () => {
-  const envUrl = process.env.NEXT_PUBLIC_SOCKET_URL;
-  if (envUrl && envUrl.trim() !== "") {
-    return envUrl.trim();
-  }
-  if (typeof window !== "undefined") {
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    return `${protocol}//${hostname}:4001`;
-  }
-  return "http://localhost:4001";
+  const envUrl = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
+  if (envUrl) return envUrl;
+  return `${window.location.protocol}//${window.location.hostname}:4001`;
 };
 
-export const getLocalUserId = () => {
-  if (typeof window === "undefined") return "temp_user";
-  // Use sessionStorage so each tab/window has its own unique collaborator presence and live cursor
-  let id = sessionStorage.getItem("whiteboard_user_id");
-  if (!id) {
-    id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : "u_" + Math.random().toString(36).substring(2, 11);
-    sessionStorage.setItem("whiteboard_user_id", id);
-  }
-  return id;
-};
+let localUserId: string | undefined;
 
-export function useSocket(
-  boardId: string,
-  options?: { onJoinDenied?: (code: string) => void }
-) {
-  const upsertRemoteElement = useBoardStore((state) => state.upsertRemoteElement);
-  const upsertRemoteCursor = useBoardStore((state) => state.upsertRemoteCursor);
-  const removeRemoteCursor = useBoardStore((state) => state.removeRemoteCursor);
-  const cleanStaleCursors = useBoardStore((state) => state.cleanStaleCursors);
-  const setPresenceUsers = useBoardStore((state) => state.setPresenceUsers);
-  const addPresenceUser = useBoardStore((state) => state.addPresenceUser);
-  const removePresenceUser = useBoardStore((state) => state.removePresenceUser);
-  const syncElements = useBoardStore((state) => state.syncElements);
-  const mergeRemoteElements = useBoardStore((state) => state.mergeRemoteElements);
-  const applyRemoteClear = useBoardStore((state) => state.applyRemoteClear);
-  const setCurrentUserId = useBoardStore((state) => state.setCurrentUserId);
+function getLocalUserId() {
+  localUserId ??= typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : "u_" + Math.random().toString(36).substring(2, 11);
+  return localUserId;
+}
 
-  const socketRef = useRef<Socket | null>(null);
-  const cursorFrameRef = useRef<number | null>(null);
-  const trailingTimerRef = useRef<number | null>(null);
-  const queuedCursorRef = useRef<Omit<CursorPosition, "userId"> | null>(null);
-  const lastCursorSentRef = useRef(0);
+function getStoredName() {
+  return sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name");
+}
+
+type StrokeProgress = Omit<DrawProgressPayload, "boardId">;
+type StateMessage = { boardId: string; elements: WhiteboardElement[]; deletedIds?: string[]; version?: number };
+
+export function useSocket(boardId: string, options?: { enabled?: boolean; onJoinDenied?: (code: string) => void }) {
+  const enabled = options?.enabled ?? true;
+  const onJoinDenied = useRef(options?.onJoinDenied);
+  onJoinDenied.current = options?.onJoinDenied;
+  const connectionRef = useRef<{ socket: Socket; boardId: string; joined: boolean } | null>(null);
+  const frameRef = useRef<number | null>(null);
   const lastResyncRef = useRef(0);
+  const queueRef = useRef({
+    cursor: null as Omit<CursorPosition, "userId"> | null,
+    laser: null as { point: Point; color?: string } | null,
+    updates: new Map<string, WhiteboardElement>(),
+    strokes: new Map<string, StrokeProgress>(),
+    announced: new WeakSet<WhiteboardElement>(),
+    announcedDeletes: new Set<string>()
+  });
 
-  const requestResync = useMemo(() => {
-    return () => {
-      const now = Date.now();
-      if (now - lastResyncRef.current < 2000) {
-        return;
+  const collaboration = useMemo(() => {
+    function joinedSocket() {
+      const connection = connectionRef.current;
+      return connection?.boardId === boardId && connection.joined && connection.socket.connected
+        ? connection.socket
+        : undefined;
+    }
+
+    function scheduleFrame() {
+      if (frameRef.current !== null) return;
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null;
+        const queue = queueRef.current;
+        const socket = joinedSocket();
+        if (socket) {
+          if (queue.cursor) socket.volatile.emit("cursor-position", { boardId, cursor: queue.cursor });
+          if (queue.laser) socket.volatile.emit("laser-point", { boardId, ...queue.laser });
+          for (const progress of queue.strokes.values()) socket.emit("draw-progress", { boardId, ...progress });
+          if (queue.updates.size === 1) {
+            socket.emit("update-element", { boardId, element: queue.updates.values().next().value });
+          } else if (queue.updates.size > 1) {
+            socket.emit("replace-elements", { boardId, elements: Array.from(queue.updates.values()), preview: true });
+          }
+        }
+        queue.cursor = null;
+        queue.laser = null;
+        queue.strokes.clear();
+        queue.updates.clear();
+      });
+    }
+
+    function emitReplace(_elements?: WhiteboardElement[], replay = false) {
+      if (useBoardStore.getState().isLocked) return;
+      const socket = joinedSocket();
+      if (!socket) return;
+      const queue = queueRef.current;
+      const { pendingLocalChanges, activeElementIds, editingElementId } = useBoardStore.getState();
+      const elements: WhiteboardElement[] = [];
+      const deletedIds: string[] = [];
+      for (const [id, element] of pendingLocalChanges) {
+        if (element) {
+          if (!replay && (activeElementIds.has(id) || id === editingElementId)) continue;
+          if (!queue.announced.has(element)) {
+            queue.updates.delete(id);
+            queue.strokes.delete(id);
+            elements.push(element);
+            queue.announced.add(element);
+          }
+        } else if (!queue.announcedDeletes.has(id)) {
+          queue.updates.delete(id);
+          queue.strokes.delete(id);
+          deletedIds.push(id);
+          queue.announcedDeletes.add(id);
+        }
       }
-      lastResyncRef.current = now;
-      if (socketRef.current?.connected && boardId) {
-        const currentName =
-          typeof window !== "undefined"
-            ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
-            : null;
-        const currentToken = getToken(boardId);
-        socketRef.current.emit("join-board", {
-          boardId,
-          userName: currentName || undefined,
-          token: currentToken || undefined
-        });
+      if (elements.length || deletedIds.length) {
+        socket.emit("replace-elements", { boardId, elements, deletedIds, preview: true });
+      }
+    }
+
+    return {
+      emitDraw(element: WhiteboardElement) {
+        if (useBoardStore.getState().isLocked) return;
+        const socket = joinedSocket();
+        if (!socket) return;
+        const queue = queueRef.current;
+        // The full stroke at pointer-up supersedes any points still queued.
+        queue.strokes.delete(element.id);
+        queue.updates.delete(element.id);
+        queue.announced.add(element);
+        socket.emit("draw", { boardId, element });
+      },
+      emitDrawProgress(progress: StrokeProgress) {
+        if (!joinedSocket() || useBoardStore.getState().isLocked || progress.points.length === 0) return;
+        const { strokes } = queueRef.current;
+        const previous = strokes.get(progress.elementId);
+        strokes.set(progress.elementId, previous
+          ? { ...progress, points: [...previous.points, ...progress.points] }
+          : progress);
+        scheduleFrame();
+      },
+      emitElementUpdate(element: WhiteboardElement) {
+        if (!joinedSocket() || useBoardStore.getState().isLocked) return;
+        queueRef.current.updates.set(element.id, element);
+        scheduleFrame();
+      },
+      emitCursor(cursor: Omit<CursorPosition, "userId">) {
+        if (!joinedSocket()) return;
+        queueRef.current.cursor = cursor;
+        scheduleFrame();
+      },
+      emitCursorLeave() {
+        queueRef.current.cursor = null;
+        joinedSocket()?.emit("cursor-leave", { boardId });
+      },
+      emitClear: () => emitReplace(),
+      emitReplace,
+      emitLaser(point: Point, color?: string) {
+        if (!joinedSocket() || useBoardStore.getState().isLocked) return;
+        queueRef.current.laser = { point, color };
+        scheduleFrame();
+      },
+      emitUpdateUserName(name: string) {
+        sessionStorage.setItem("whiteboard_user_name", name);
+        localStorage.setItem("whiteboard_user_name", name);
+        joinedSocket()?.emit("update-user-name", { boardId, name });
+      },
+      requestResync() {
+        const socket = joinedSocket();
+        const now = Date.now();
+        if (!socket || now - lastResyncRef.current < 2000) return;
+        lastResyncRef.current = now;
+        socket.emit("request-state", { boardId });
       }
     };
   }, [boardId]);
 
   useEffect(() => {
-    let isMounted = true;
-    let activeSocket: Socket | null = null;
-    registerResyncHandler(requestResync);
+    if (!enabled) return;
+    let active = true;
+    let socket: Socket | undefined;
+    let retryTimer: number | undefined;
+    const queue = queueRef.current;
+    registerResyncHandler(collaboration.requestResync);
 
-    const setupSocket = async () => {
-      const { io } = await import("socket.io-client");
-      if (!isMounted) return;
+    function resetQueue() {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      queue.cursor = queue.laser = null;
+      queue.updates.clear();
+      queue.strokes.clear();
+      queue.announced = new WeakSet();
+      queue.announcedDeletes.clear();
+    }
 
-      const localId = getLocalUserId();
-      const storedName =
-        typeof window !== "undefined"
-          ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
-          : null;
-      const initialToken = getToken(boardId);
-
-      // Ensure local user ID is immediately registered in Zustand store
-      setCurrentUserId(localId);
-
-      activeSocket = io(getSocketUrl(), {
-        autoConnect: true,
-        transports: ["polling", "websocket"],
-        // Never give up: a dropped socket used to end live collaboration for
-        // the rest of the session. Come back fast, and forever.
-        reconnection: true,
-        reconnectionAttempts: Infinity,
+    void import("socket.io-client").then(({ io }) => {
+      if (!active) return;
+      const state = useBoardStore.getState;
+      const userId = getLocalUserId();
+      state().setCurrentUserId(userId);
+      const activeSocket = io(getSocketUrl(), {
+        autoConnect: false,
+        transports: ["websocket", "polling"],
+        tryAllTransports: true,
         reconnectionDelay: 300,
         reconnectionDelayMax: 2000,
         randomizationFactor: 0.3,
-        timeout: 20000,
-        auth: {
-          userId: localId,
-          name: storedName || undefined,
-          token: initialToken || undefined
-        }
+        auth: { userId }
       });
-      socketRef.current = activeSocket;
+      socket = activeSocket;
+      const connection = { socket: activeSocket, boardId, joined: false };
+      connectionRef.current = connection;
 
-      const handleIdentity = (identity: PresenceUser) => {
-        if (identity?.userId) {
-          setCurrentUserId(identity.userId);
+      function join() {
+        if (activeSocket.connected) {
+          activeSocket.emit("join-board", { boardId, userName: getStoredName(), token: getToken(boardId) });
         }
-      };
-
-      const handleJoinDenied = ({ boardId: deniedId, code }: { boardId: string; code: string }) => {
-        if (deniedId !== boardId) return;
-        console.log(`join denied: ${code}`);
-        useBoardStore.getState().setIsLocked(true);
-        options?.onJoinDenied?.(code);
-      };
-
-      // Reconnect / state sync (A2.4)
-      const handleBoardState = ({
-        elements,
-        version,
-        deletedIds
-      }: {
-        boardId: string;
-        elements: WhiteboardElement[];
-        version?: number;
-        deletedIds?: string[];
-      }) => {
-        const localVersion = useBoardStore.getState().version;
-        // Union merge (never drops local work) + tombstones, and never let the
-        // autosave version move backwards.
-        mergeRemoteElements(
-          elements,
-          deletedIds,
-          version === undefined ? undefined : Math.max(version, localVersion)
-        );
-      };
-
-      const handleDraw = ({ element }: DrawEventPayload) => {
-        upsertRemoteElement(element);
-      };
-
-      const handleDrawProgress = ({
-        elementId,
-        points,
-        x,
-        y,
-        width,
-        height
-      }: Omit<DrawProgressPayload, "boardId">) => {
-        if (!elementId || !Array.isArray(points)) return;
-        useBoardStore.getState().appendRemotePoints(elementId, points, { x, y, width, height });
-      };
-
-      const handleUpdateElement = ({ element }: UpdateElementPayload) => {
-        upsertRemoteElement(element);
-      };
-
-      const handleCursor = ({ cursor }: { cursor: CursorPosition }) => {
-        upsertRemoteCursor(cursor);
-        if (cursor?.userId) {
-          addPresenceUser({
-            userId: cursor.userId,
-            name: cursor.name || `User-${cursor.userId.slice(0, 4)}`,
-            color: cursor.color || "#3b82f6"
-          });
-        }
-      };
-
-      const handleCursorLeave = ({ userId }: { userId: string }) => {
-        removeRemoteCursor(userId);
-      };
-
-      const handlePresenceState = ({ users }: { users: PresenceUser[] }) => {
-        setPresenceUsers(users);
-      };
-
-      const handlePresenceJoin = ({ user }: { user: PresenceUser }) => {
-        addPresenceUser(user);
-      };
-
-      const handlePresenceLeave = ({ userId }: { userId: string }) => {
-        removePresenceUser(userId);
-        removeRemoteCursor(userId);
-      };
-
-      const handleClear = () => {
-        // Tombstone everything: a plain [] merge would let peers' stale copies
-        // flow straight back in on the next snapshot.
-        applyRemoteClear();
-      };
-
-      const handleReplace = ({
-        elements,
-        version,
-        deletedIds
-      }: {
-        elements: WhiteboardElement[];
-        version?: number;
-        deletedIds?: string[];
-      }) => {
-        // A peer's board snapshot is a set of upserts, never a delete list.
-        // Anything it omits (our newest stroke, our in-flight shape) stays.
-        mergeRemoteElements(elements, deletedIds, version);
-      };
-
-      const handleBoardDeleted = () => {
-        alert("This board has been deleted.");
-        window.location.href = "/";
-      };
-
-      const handleLaser = ({ point, color }: { point: { x: number; y: number }; color: string }) => {
-        useBoardStore.getState().addLaserPoint(point, color);
-      };
-
-      const handleConnectError = (err: Error) => {
-        console.warn("Socket connection warning:", err.message);
-      };
-
-      // Register all listeners BEFORE emitting join/request-state
-      activeSocket.on("identity", handleIdentity);
-      activeSocket.on("join-denied", handleJoinDenied);
-      activeSocket.on("board:state", handleBoardState);
-      activeSocket.on("draw", handleDraw);
-      activeSocket.on("draw-progress", handleDrawProgress);
-      activeSocket.on("update-element", handleUpdateElement);
-      activeSocket.on("cursor-position", handleCursor);
-      activeSocket.on("cursor-leave", handleCursorLeave);
-      activeSocket.on("presence:state", handlePresenceState);
-      activeSocket.on("presence:join", handlePresenceJoin);
-      activeSocket.on("presence:leave", handlePresenceLeave);
-      activeSocket.on("clear-board", handleClear);
-      activeSocket.on("replace-elements", handleReplace);
-      activeSocket.on("board-deleted", handleBoardDeleted);
-      activeSocket.on("laser-point", handleLaser);
-      activeSocket.on("connect_error", handleConnectError);
-
-      // Initial join and state request
-      const join = () => {
-        const currentName =
-          typeof window !== "undefined"
-            ? (sessionStorage.getItem("whiteboard_user_name") || localStorage.getItem("whiteboard_user_name"))
-            : null;
-        const currentToken = getToken(boardId);
-        activeSocket?.emit("join-board", {
-          boardId,
-          userName: currentName || undefined,
-          token: currentToken || undefined
-        });
-        activeSocket?.emit("request-state", { boardId });
-      };
+      }
 
       activeSocket.on("connect", join);
-      if (activeSocket.connected) {
-        join();
-      }
-
-      return () => {
-        activeSocket?.emit("leave-board", { boardId });
-        activeSocket?.off("identity", handleIdentity);
-        activeSocket?.off("join-denied", handleJoinDenied);
-        activeSocket?.off("connect", join);
-        activeSocket?.off("board:state", handleBoardState);
-        activeSocket?.off("draw", handleDraw);
-      activeSocket?.off("draw-progress", handleDrawProgress);
-        activeSocket?.off("update-element", handleUpdateElement);
-        activeSocket?.off("cursor-position", handleCursor);
-        activeSocket?.off("cursor-leave", handleCursorLeave);
-        activeSocket?.off("presence:state", handlePresenceState);
-        activeSocket?.off("presence:join", handlePresenceJoin);
-        activeSocket?.off("presence:leave", handlePresenceLeave);
-        activeSocket?.off("clear-board", handleClear);
-        activeSocket?.off("replace-elements", handleReplace);
-        activeSocket?.off("board-deleted", handleBoardDeleted);
-        activeSocket?.off("laser-point", handleLaser);
-        activeSocket?.off("connect_error", handleConnectError);
-        activeSocket?.disconnect();
-        if (socketRef.current === activeSocket) {
-          socketRef.current = null;
+      activeSocket.on("disconnect", () => {
+        connection.joined = false;
+        resetQueue();
+        state().setPresenceUsers([]);
+      });
+      activeSocket.on("join-unavailable", ({ boardId: unavailableId }) => {
+        if (unavailableId !== boardId) return;
+        window.clearTimeout(retryTimer);
+        retryTimer = window.setTimeout(join, 2000);
+      });
+      activeSocket.on("join-denied", ({ boardId: deniedId, code }) => {
+        if (deniedId !== boardId) return;
+        window.clearTimeout(retryTimer);
+        connection.joined = false;
+        state().setIsLocked(true);
+        onJoinDenied.current?.(code);
+      });
+      activeSocket.on("board:state", (message: StateMessage) => {
+        if (message.boardId !== boardId) return;
+        window.clearTimeout(retryTimer);
+        state().mergeRemoteElements(message.elements, message.deletedIds, message.version, "snapshot");
+        const wasJoined = connection.joined;
+        connection.joined = true;
+        if (!wasJoined) collaboration.emitReplace(undefined, true);
+      });
+      activeSocket.on("board:committed", (message: StateMessage) => {
+        if (message.boardId === boardId) {
+          state().mergeRemoteElements(message.elements, message.deletedIds, message.version, "committed");
         }
+      });
+      activeSocket.on("replace-elements", (message: StateMessage) => {
+        if (message.boardId === boardId) {
+          state().mergeRemoteElements(message.elements, message.deletedIds, message.version);
+        }
+      });
+      const upsert = ({ boardId: target, element }: DrawEventPayload) => {
+        if (target === boardId) state().upsertRemoteElement(element);
       };
-    };
-
-    let cleanupSocket: (() => void) | undefined;
-    void setupSocket().then((cleanup) => {
-      cleanupSocket = cleanup;
+      activeSocket.on("draw", upsert);
+      activeSocket.on("update-element", upsert);
+      activeSocket.on("draw-progress", ({ boardId: target, elementId, points, x, y, width, height }: DrawProgressPayload) => {
+        if (target === boardId) state().appendRemotePoints(elementId, points, { x, y, width, height });
+      });
+      activeSocket.on("cursor-position", ({ boardId: target, cursor }: { boardId: string; cursor: CursorPosition }) => {
+        if (target === boardId) state().upsertRemoteCursor(cursor);
+      });
+      activeSocket.on("cursor-leave", ({ boardId: target, userId: departed }) => {
+        if (target === boardId) state().removeRemoteCursor(departed);
+      });
+      activeSocket.on("presence:state", ({ boardId: target, users }: { boardId: string; users: PresenceUser[] }) => {
+        if (target === boardId) state().setPresenceUsers(users);
+      });
+      activeSocket.on("clear-board", () => state().applyRemoteClear());
+      activeSocket.on("board-deleted", () => {
+        // Navigation after a confirmed delete should bypass the unsaved-work guard.
+        state().loadBoard([]);
+        window.location.replace("/");
+      });
+      activeSocket.on("laser-point", ({ boardId: target, point, color }) => {
+        if (target === boardId) state().addLaserPoint(point, color);
+      });
+      activeSocket.connect();
     });
 
-    // Fast presence sync heartbeat and stale cursor cleanup (every 2.5s)
-    const cleanupInterval = window.setInterval(() => {
-      cleanStaleCursors();
-      if (socketRef.current?.connected && boardId) {
-        socketRef.current.emit("request-presence", { boardId });
-      }
-    }, 2500);
-
-    // Immediate cleanup when tab or browser window is closed or navigated away from
-    const handleBeforeUnload = () => {
-      if (socketRef.current?.connected && boardId) {
-        try {
-          socketRef.current.emit("leave-board", { boardId });
-          socketRef.current.disconnect();
-        } catch {}
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    window.addEventListener("pagehide", handleBeforeUnload);
-
+    const cursorCleanup = window.setInterval(() => useBoardStore.getState().cleanStaleCursors(), 2500);
     return () => {
-      isMounted = false;
+      active = false;
+      window.clearInterval(cursorCleanup);
+      window.clearTimeout(retryTimer);
       registerResyncHandler(null);
-      cleanupSocket?.();
-      window.clearInterval(cleanupInterval);
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      window.removeEventListener("pagehide", handleBeforeUnload);
-      if (trailingTimerRef.current !== null) {
-        window.clearTimeout(trailingTimerRef.current);
-      }
-      if (cursorFrameRef.current !== null) {
-        window.cancelAnimationFrame(cursorFrameRef.current);
-      }
+      resetQueue();
+      lastResyncRef.current = 0;
+      socket?.removeAllListeners();
+      socket?.disconnect();
+      if (connectionRef.current?.boardId === boardId) connectionRef.current = null;
     };
-  }, [
-    boardId,
-    addPresenceUser,
-    cleanStaleCursors,
-    removePresenceUser,
-    removeRemoteCursor,
-    setPresenceUsers,
-    setCurrentUserId,
-    syncElements,
-    mergeRemoteElements,
-    applyRemoteClear,
-    upsertRemoteCursor,
-    upsertRemoteElement,
-    requestResync
-  ]);
+  }, [boardId, collaboration, enabled]);
 
-  return useMemo(
-    () => ({
-      emitDraw(element: WhiteboardElement) {
-        if (useBoardStore.getState().isLocked) return;
-        socketRef.current?.emit("draw", { boardId, element });
-      },
-      emitDrawProgress(progress: Omit<DrawProgressPayload, "boardId">) {
-        if (useBoardStore.getState().isLocked) return;
-        if (!progress.points.length) return;
-        socketRef.current?.emit("draw-progress", { boardId, ...progress });
-      },
-      emitElementUpdate(element: WhiteboardElement) {
-        if (useBoardStore.getState().isLocked) return;
-        socketRef.current?.emit("update-element", { boardId, element });
-      },
-      // A6.3: Cursor throttle with trailing send guarantee
-      emitCursor(cursor: Omit<CursorPosition, "userId">) {
-        queuedCursorRef.current = cursor;
-
-        const scheduleTrailingSend = (delayMs: number) => {
-          if (trailingTimerRef.current !== null) return;
-          trailingTimerRef.current = window.setTimeout(() => {
-            trailingTimerRef.current = null;
-            if (queuedCursorRef.current && socketRef.current) {
-              socketRef.current.emit("cursor-position", {
-                boardId,
-                cursor: queuedCursorRef.current
-              });
-              lastCursorSentRef.current = Date.now();
-            }
-          }, Math.max(0, delayMs));
-        };
-
-        if (cursorFrameRef.current !== null) {
-          return;
-        }
-
-        cursorFrameRef.current = window.requestAnimationFrame(() => {
-          cursorFrameRef.current = null;
-          const now = Date.now();
-          const elapsed = now - lastCursorSentRef.current;
-
-          if (elapsed >= THROTTLE_MS) {
-            if (queuedCursorRef.current && socketRef.current) {
-              socketRef.current.emit("cursor-position", {
-                boardId,
-                cursor: queuedCursorRef.current
-              });
-              lastCursorSentRef.current = now;
-            }
-          } else {
-            scheduleTrailingSend(THROTTLE_MS - elapsed);
-          }
-        });
-      },
-      emitClear() {
-        if (useBoardStore.getState().isLocked) return;
-        socketRef.current?.emit("clear-board", { boardId });
-      },
-      emitDeleteBoard() {
-        if (useBoardStore.getState().isLocked) return;
-        socketRef.current?.emit("delete-board", { boardId });
-      },
-      emitReplace(elements: WhiteboardElement[]) {
-        if (useBoardStore.getState().isLocked) return;
-        const { version, deletedElementIds } = useBoardStore.getState();
-        socketRef.current?.emit("replace-elements", {
-          boardId,
-          elements,
-          version,
-          deletedIds: Array.from(deletedElementIds)
-        });
-      },
-      emitLaser(point: { x: number; y: number }, color?: string) {
-        if (useBoardStore.getState().isLocked) return;
-        socketRef.current?.emit("laser-point", { boardId, point, color });
-      },
-      emitUpdateUserName(name: string) {
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("whiteboard_user_name", name);
-          localStorage.setItem("whiteboard_user_name", name);
-        }
-        socketRef.current?.emit("update-user-name", { boardId, name });
-      },
-      requestResync() {
-        requestResync();
-      }
-    }),
-    [boardId, requestResync]
-  );
+  return collaboration;
 }

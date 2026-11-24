@@ -30,6 +30,7 @@ export function rateLimiter(options: RateLimiterOptions) {
     }
 
     if (entry.count >= options.max) {
+      res.setHeader("Retry-After", Math.max(1, Math.ceil((entry.resetAt - now) / 1000)));
       return res.status(429).json({
         error: options.message || "Too many requests. Please slow down."
       });

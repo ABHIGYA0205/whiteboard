@@ -1,13 +1,11 @@
+import { fileURLToPath } from "node:url";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    externalDir: true
-  },
-  eslint: {
-    ignoreDuringBuilds: true
-  },
+  agentRules: false,
+  turbopack: { root: fileURLToPath(new URL("..", import.meta.url)) },
   async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
+    const apiUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001";
     return [
       {
         source: "/uploads/:path*",

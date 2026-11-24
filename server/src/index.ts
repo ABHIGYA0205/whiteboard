@@ -22,7 +22,7 @@ async function start() {
       await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 5000 });
       console.log("Connected to MongoDB successfully");
     } catch (err: any) {
-      console.warn(`MongoDB notice: ${err?.message || err}. Running with in-memory fallback while reconnecting...`);
+      console.warn(`MongoDB unavailable: ${err?.message || err}. Retrying connection.`);
       setTimeout(connectMongo, 10000);
     }
   };
@@ -46,7 +46,8 @@ async function start() {
       }
       callback(new Error(`Origin ${origin} is not allowed by CORS.`));
     },
-    credentials: true
+    credentials: true,
+    exposedHeaders: ["Retry-After"]
   };
 
   // Security headers (A5.4)
@@ -135,11 +136,11 @@ async function start() {
     // meant a 3 s stall (large board autosave, slow Mongo, CPU-starved free
     // instance, background-tab timer throttling) silently killed the socket —
     // and with it all live collaboration, until the user reloaded the page.
-    // Presence does NOT depend on this: clients poll `request-presence`
-    // themselves, so a slow heartbeat costs nothing in freshness.
     pingInterval: 25000,
     pingTimeout: 20000
   });
+
+  app.set("socket.io", io);
 
   io.on("connection", (socket) => {
     registerBoardSocket(io, socket);

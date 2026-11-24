@@ -1,0 +1,11 @@
+.git
+**/.DS_Store
+**/.env
+**/.env.*
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+uploads
+server/uploads
+board-demo.mp4

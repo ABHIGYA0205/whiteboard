@@ -84,6 +84,41 @@ export function useKeyboardShortcuts({
         return;
       }
 
+      // F1.2: Copy
+      if (isMeta && key === "c") {
+        if (selectedElementIds.length > 0) {
+          copySelected();
+        }
+        return;
+      }
+
+      if (key === "0") {
+        event.preventDefault();
+        resetViewport();
+        return;
+      }
+
+      if (key === "escape") {
+        event.preventDefault();
+        setTool("select");
+        return;
+      }
+
+      // F1.13: Help dialog shortcut
+      if (event.key === "?" || (key === "/" && event.shiftKey)) {
+        event.preventDefault();
+        onShowShortcuts?.();
+        return;
+      }
+
+      if (useBoardStore.getState().isLocked) {
+        if (!isMeta && (key === "h" || key === "v")) {
+          event.preventDefault();
+          setTool(SHORTCUT_TO_TOOL[key]);
+        }
+        return;
+      }
+
       if (isMeta && key === "z" && event.shiftKey) {
         event.preventDefault();
         const next = redo();
@@ -102,14 +137,6 @@ export function useKeyboardShortcuts({
         event.preventDefault();
         const next = redo();
         if (next) onReplace(next);
-        return;
-      }
-
-      // F1.2: Copy
-      if (isMeta && key === "c") {
-        if (selectedElementIds.length > 0) {
-          copySelected();
-        }
         return;
       }
 
@@ -160,12 +187,6 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      if (key === "0") {
-        event.preventDefault();
-        resetViewport();
-        return;
-      }
-
       const currentSelectedIds = useBoardStore.getState().selectedElementIds;
       const currentSelectedId = useBoardStore.getState().selectedElementId;
       if ((key === "backspace" || key === "delete") && (currentSelectedIds.length > 0 || currentSelectedId)) {
@@ -192,22 +213,9 @@ export function useKeyboardShortcuts({
         }
       }
 
-      if (key === "escape") {
-        event.preventDefault();
-        setTool("select");
-        return;
-      }
-
       if (key === "x") {
         event.preventDefault();
         onClear();
-        return;
-      }
-
-      // F1.13: Help dialog shortcut
-      if (event.key === "?" || (key === "/" && event.shiftKey)) {
-        event.preventDefault();
-        onShowShortcuts?.();
         return;
       }
 

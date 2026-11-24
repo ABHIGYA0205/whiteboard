@@ -1,5 +1,4 @@
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
-import { sameElement } from "@shared/collab";
 import { getToken, setToken, clearToken } from "./boardAuth";
 import { useBoardStore } from "@/store/boardStore";
 
@@ -51,7 +50,10 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
 
   const response = await fetch(url, {
     ...init,
-    headers
+    headers,
+    signal: init?.signal && typeof AbortSignal.any === "function"
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)])
+      : init?.signal
   });
 
   if (!response.ok) {
@@ -75,9 +77,11 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
     } catch {
       // ignore parse errors
     }
-    const error = new Error(message) as Error & { status?: number; code?: string };
+    const error = new Error(message) as Error & { status?: number; code?: string; retryAfterMs?: number };
     error.status = response.status;
     if (code) error.code = code;
+    const delay = Number(response.headers.get("Retry-After"));
+    if (delay > 0) error.retryAfterMs = delay * 1000;
     throw error;
   }
 
@@ -85,29 +89,9 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
 }
 
 export async function createBoard(): Promise<BoardDocument> {
-  try {
-    const board = await request<BoardDocument & { ownerToken?: string }>("/board", {
-      method: "POST"
-    });
-    if (board.id && board.ownerToken) {
-      setToken(board.id, board.ownerToken);
-    }
-    return board;
-  } catch (error) {
-    console.warn("Backend createBoard failed, providing local session board:", error);
-    const localId =
-      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : Math.random().toString(36).substring(2, 11);
-
-    return {
-      id: localId,
-      version: 0,
-      elements: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-  }
+  const board = await request<BoardDocument & { ownerToken?: string }>("/board", { method: "POST" });
+  if (board.id && board.ownerToken) setToken(board.id, board.ownerToken);
+  return board;
 }
 
 export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument }> {
@@ -139,87 +123,25 @@ export function createShareLink(
   );
 }
 
-export async function getBoard(id: string): Promise<BoardDocument> {
-  try {
-    return await request<BoardDocument>(`/board/${id}`, undefined, id);
-  } catch (error: any) {
-    if (error?.status === 401) {
-      throw error;
-    }
-    console.warn(`Backend getBoard(${id}) failed, providing fallback:`, error);
-    return {
-      id,
-      version: 0,
-      elements: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-  }
+export function getBoard(id: string, signal?: AbortSignal): Promise<BoardDocument> {
+  return request<BoardDocument>(`/board/${id}`, { signal }, id);
 }
 
-export function saveBoard(
+export function saveBoardChanges(
   id: string,
-  elements: WhiteboardElement[],
-  version?: number,
-  deletedIds?: string[]
+  changes: ReadonlyMap<string, WhiteboardElement | null>,
+  signal?: AbortSignal
 ) {
-  return request<BoardDocument>(`/board/${id}`, {
-    method: "PUT",
-    body: JSON.stringify({ elements, version, deletedIds })
-  }, id);
-}
-
-export function saveBoardOps(id: string, ops: BoardOp[], version?: number) {
-  return request<BoardDocument>(`/board/${id}/ops`, {
-    method: "POST",
-    body: JSON.stringify({ ops, version })
-  }, id);
-}
-
-/**
- * Autosave that uploads only what changed since the last successful save.
- * The full-board PUT re-uploaded every element every 4 s (tens of KB on a busy
- * board), which is what pushed small hosted instances into stalls.
- */
-export async function saveBoardDelta(
-  id: string,
-  elements: WhiteboardElement[],
-  previouslySaved: Map<string, WhiteboardElement>,
-  deletedIds: string[],
-  version?: number
-): Promise<{ board: BoardDocument; sentIds: string[]; removedIds: string[] }> {
-  const currentIds = new Set(elements.map((element) => element.id));
   const ops: BoardOp[] = [];
-  const sentIds: string[] = [];
-
-  for (const element of elements) {
-    const previous = previouslySaved.get(element.id);
-    if (!previous || !sameElement(previous, element)) {
-      ops.push({ op: previous ? "update" : "add", element });
-      sentIds.push(element.id);
-    }
+  for (const [elementId, element] of changes) {
+    if (element) ops.push({ op: "update", element });
+    else ops.push({ op: "delete", element: { id: elementId } as WhiteboardElement });
   }
-
-  const removedIds = [
-    ...Array.from(previouslySaved.keys()).filter((elementId) => !currentIds.has(elementId)),
-    ...deletedIds.filter((elementId) => !currentIds.has(elementId))
-  ].filter((elementId, index, all) => all.indexOf(elementId) === index);
-
-  for (const elementId of removedIds) {
-    // The delete op only needs an id; a minimal stub satisfies the type.
-    ops.push({ op: "delete", element: { id: elementId } as WhiteboardElement });
-  }
-
-  if (ops.length === 0) {
-    return { board: { id, version: version ?? 0, elements } as BoardDocument, sentIds, removedIds };
-  }
-
-  const board = await saveBoardOps(id, ops, version);
-  return { board, sentIds, removedIds };
-}
-
-export function clearBoardRemote(id: string) {
-  return saveBoard(id, []);
+  return request<{ version: number; elements: WhiteboardElement[]; deletedIds: string[] }>(
+    `/board/${id}/ops?compact=1`,
+    { method: "POST", body: JSON.stringify({ ops }), signal },
+    id
+  );
 }
 
 export function deleteBoardRemote(id: string) {

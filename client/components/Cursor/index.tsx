@@ -14,12 +14,12 @@ function getContrastTextColor(hexColor?: string): string {
 }
 
 export function CursorLayer() {
-  const cursors = useBoardStore((state) => Object.values(state.remoteCursors));
+  const cursors = useBoardStore((state) => state.remoteCursors);
   const viewport = useBoardStore((state) => state.viewport);
 
   return (
     <div className="cursor-layer" aria-hidden="true">
-      {cursors.map((cursor) => {
+      {Object.values(cursors).map((cursor) => {
         const screenX = viewport.x + cursor.x * viewport.zoom;
         const screenY = viewport.y + cursor.y * viewport.zoom;
         const rawColor = cursor.color || "#3b82f6";

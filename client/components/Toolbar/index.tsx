@@ -173,7 +173,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const tool = useBoardStore((state) => state.tool);
   const setTool = useBoardStore((state) => state.setTool);
   const elements = useBoardStore((state) => state.elements);
-  const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
   const selectElement = useBoardStore((state) => state.selectElement);
   const isLocked = useBoardStore((state) => state.isLocked);
@@ -228,7 +227,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           points: []
         };
 
-        const nextElements = [...elements, imageElement];
+        const nextElements = [...useBoardStore.getState().elements, imageElement];
         commitElements(nextElements);
         collaboration?.emitDraw(imageElement);
         setTool("select");
@@ -360,7 +359,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
     };
 
     // Never remove or replace elements. Append one image element with commitElements, emitDraw, select it.
-    const nextElements = [...elements, imgEl];
+    const nextElements = [...useBoardStore.getState().elements, imgEl];
     commitElements(nextElements);
     collaboration?.emitDraw(imgEl);
     setTool("select");
@@ -370,13 +369,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const handleColorChange = (color: string) => {
     setStrokeColor(color);
     if (tool === "select" && selectedElementIds.length > 0) {
-      const idSet = new Set(selectedElementIds);
-      const nextElements = elements.map((el) =>
-        idSet.has(el.id) ? { ...el, strokeColor: color } : el
-      );
-      setElements(nextElements);
-      commitElements(nextElements);
-      collaboration?.emitReplace(nextElements);
+      collaboration?.emitReplace(useBoardStore.getState().elements);
     }
   };
 

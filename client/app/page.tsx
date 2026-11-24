@@ -35,11 +35,7 @@ export default function HomePage() {
         const board = await createBoard();
         router.push(`/board/${board.id}`);
       } catch {
-        const fallbackId =
-          typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-            ? crypto.randomUUID()
-            : Math.random().toString(36).substring(2, 11);
-        router.push(`/board/${fallbackId}`);
+        setError("Could not create a board. Check your connection and try again.");
       }
     });
   };
@@ -72,7 +68,7 @@ export default function HomePage() {
       icon: <Users size={20} color="#818cf8" />,
       title: "Multiplayer Live Presence",
       badge: "Real-time Sync",
-      desc: "Synchronized live collaborator cursors, name badges, and element updates with sub-16ms latency across unlimited participants."
+      desc: "See collaborators’ cursors, names, and edits as they work on the same board."
     },
     {
       id: "feat-2",

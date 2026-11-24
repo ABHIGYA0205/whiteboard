@@ -1,6 +1,6 @@
 # Whiteboard
 
-A high-performance, real-time collaborative whiteboard built with Next.js 14, TypeScript, Node.js Express, Socket.io, Zustand, and MongoDB. Features an infinite canvas, multi-user live cursors, presence awareness with follow-mode, heuristic auto-clean shape detection, and AI sketch enhancement.
+A high-performance, real-time collaborative whiteboard built with Next.js 16, TypeScript, Node.js Express, Socket.io, Zustand, and MongoDB. Features an infinite canvas, multi-user live cursors, presence awareness with follow-mode, heuristic auto-clean shape detection, and AI sketch enhancement.
 
 ---
 
@@ -8,7 +8,7 @@ A high-performance, real-time collaborative whiteboard built with Next.js 14, Ty
 
 ```mermaid
 graph TD
-    Client[Next.js 14 Client Canvas & Toolbar] <-->|Websocket Socket.io| Server[Express & Socket.io Server]
+    Client[Next.js 16 Client Canvas & Toolbar] <-->|Websocket Socket.io| Server[Express & Socket.io Server]
     Client -->|REST API /board, /ai, /uploads| Server
     Server -->|Persist Elements & Versioning| Mongo[(MongoDB)]
     Server -->|Static Uploads /uploads| FS[(Disk Storage)]
@@ -19,7 +19,7 @@ graph TD
 
 ## Features
 
-- **Infinite Canvas**: Zero-latency HTML5 canvas with smooth pan, zoom, pinch-to-zoom, and two-finger mobile touch gestures.
+- **Infinite Canvas**: HTML5 canvas with smooth pan, zoom, pinch-to-zoom, and two-finger mobile touch gestures.
 - **Complete Tool Suite**: Pencil, rectangle, circle, line, arrow, multi-line text with dynamic font scaling, image upload, and eraser.
 - **Real-Time Collaboration**: Live cursors with server-assigned identities, presence avatars, and **Follow User** mode.
 - **Collaborative Undo & Redo**: Broadcasted state transitions keeping all tabs and users in sync.
@@ -36,7 +36,7 @@ graph TD
 
 ```text
 .
-├── client/              # Next.js 14 frontend (Canvas, Toolbar, Hooks, Store)
+├── client/              # Next.js 16 frontend (Canvas, Toolbar, Hooks, Store)
 ├── server/              # Express + Socket.io backend (Controllers, Sockets, Models)
 ├── shared/              # Shared TypeScript types package (@shared)
 ├── scripts/             # Cross-platform development orchestration
@@ -50,6 +50,8 @@ graph TD
 
 ## Collaboration Socket Events
 
+The web client batches pointer previews by animation frame and sends only local element changes to autosave. MongoDB stores edits and deletion markers. Keep collaboration on one Socket.IO server instance so all participants share the same live room state.
+
 | Event | Direction | Payload | Description |
 |---|---|---|---|
 | `identity` | Server → Client | `{ userId, name, color }` | Server assigns distinct identity & color palette |
@@ -60,11 +62,12 @@ graph TD
 | `presence:join` | Server → Client | `{ boardId, user }` | Notifies room of collaborator arrival |
 | `presence:leave`| Server → Client | `{ boardId, userId }` | Notifies room of collaborator departure |
 | `presence:state`| Server → Client | `{ boardId, users }` | Current room presence list |
-| `cursor-position`| Bidirectional | `{ boardId, cursor }` | Throttled cursor position with trailing send |
+| `cursor-position`| Bidirectional | `{ boardId, cursor }` | Latest cursor position, batched by animation frame |
 | `cursor-leave` | Server → Client | `{ boardId, userId }` | Removes remote cursor immediately |
 | `draw` | Bidirectional | `{ boardId, element }` | Real-time stroke / element broadcast |
 | `update-element`| Bidirectional | `{ boardId, element }` | Element transformation / resize |
-| `replace-elements`| Bidirectional | `{ boardId, elements }` | Undo/Redo or batch replace synchronization |
+| `replace-elements`| Bidirectional | `{ boardId, elements, deletedIds }` | Preview a batch of element changes or deletions |
+| `board:committed` | Server → Client | `{ boardId, elements, deletedIds, version }` | Confirm the element changes stored by MongoDB |
 | `clear-board` | Bidirectional | `{ boardId }` | Clear board notification |
 
 ---
@@ -90,7 +93,7 @@ graph TD
 
 ### 1. Requirements
 
-- Node.js 18+
+- Node.js 22+
 - npm 9+
 - MongoDB running locally or via Docker
 
@@ -143,9 +146,14 @@ NEXT_PUBLIC_SOCKET_URL=http://localhost:4001
 
 ### 3. Run with Docker Compose
 
+Set `BOARD_SECRET` once in the project root's `.env` file. Keep the same value across restarts so board and share links keep working. If the file does not yet contain `BOARD_SECRET`, generate and append one with:
+
 ```bash
-docker compose up -d
+(umask 077; printf 'BOARD_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env)
+docker compose up --build --detach --wait
 ```
+
+Open the app at `http://localhost:3000`. Compose stores boards and local image uploads in named volumes. For a custom public API or Socket.IO URL, set `NEXT_PUBLIC_API_URL` or `NEXT_PUBLIC_SOCKET_URL` in the root `.env` and rebuild the frontend.
 
 ### 4. Run Directly with Node / npm
 
@@ -159,9 +167,15 @@ npm run dev
 # Run typechecks
 npm run typecheck
 
-# Run test suite
-npm run test
+# Run test suites
+npm test
+npm run test:collab
 
 # Build production bundle
 npm run build
 ```
+
+
+With the development client and an isolated MongoDB-backed API running, use `node tests/multi-editor.e2e.mjs` to exercise concurrent browser editing, persistence, reconnect, and share roles. Set `BASE_URL` and `API_URL` if using different ports.
+
+For a production server, set `NODE_ENV=production`, a stable random `BOARD_SECRET`, `MONGO_URI`, and the deployed web origin in `CLIENT_ORIGIN`. Check `/health/ready` for MongoDB readiness. The production server returns a storage error during a MongoDB outage so the client can retry unsaved edits.

@@ -38,6 +38,10 @@ export interface S3Config {
 function validateEnv() {
   const errors: string[] = [];
 
+  if (process.env.NODE_ENV === "production" && !process.env.BOARD_SECRET?.trim()) {
+    errors.push("Set BOARD_SECRET to a stable secret in production.");
+  }
+
   const rawPort = process.env.PORT ?? "4001";
   const port = Number(rawPort);
   if (isNaN(port) || port <= 0 || port > 65535) {

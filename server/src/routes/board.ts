@@ -17,6 +17,10 @@ export const boardRouter = Router();
 const generalLimiter = rateLimiter({ windowMs: 60 * 1000, max: 120 });
 const createLimiter = rateLimiter({ windowMs: 60 * 1000, max: 20, message: "Too many boards created. Please wait." });
 
+// Autosave batches have their own allowance because editors on the same
+// network can share an IP address.
+const autosaveLimiter = rateLimiter({ windowMs: 60 * 1000, max: 900 });
+boardRouter.post("/:id/ops", autosaveLimiter, applyBoardOpsController);
 boardRouter.use(generalLimiter);
 
 boardRouter.post("/", createLimiter, createBoardController);
@@ -27,4 +31,3 @@ boardRouter.post("/:id/share", shareBoardController);
 boardRouter.get("/:id", getBoardController);
 boardRouter.put("/:id", updateBoardController);
 boardRouter.delete("/:id", deleteBoardController);
-boardRouter.post("/:id/ops", applyBoardOpsController);

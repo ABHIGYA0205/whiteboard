@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -17,6 +17,9 @@ COPY . .
 
 # Build the client
 WORKDIR /app/client
+ARG INTERNAL_API_URL
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_SOCKET_URL
 RUN npm run build
 
 EXPOSE 3000

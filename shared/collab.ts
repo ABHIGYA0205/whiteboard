@@ -16,13 +16,7 @@ import { sortByLayer } from "./layers";
  */
 
 
-/**
- * Cheap structural equality for elements. Avoids JSON.stringify on every element
- * of every incoming snapshot (which is O(points) per element and shows up as lag
- * on large boards). Covers every persisted field; strokes are compared by point
- * count + endpoints, which is enough because a partial stroke is always re-sent
- * with more points on the next event.
- */
+/** Compares persisted fields without serializing whole elements. */
 export function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean {
   if (a === b) return true;
   if (
@@ -54,10 +48,10 @@ export function sameElement(a: WhiteboardElement, b: WhiteboardElement): boolean
   const ap = a.points ?? [];
   const bp = b.points ?? [];
   if (ap.length !== bp.length) return false;
-  if (ap.length > 0) {
-    const afl = ap[0], bfl = bp[0];
-    const alp = ap[ap.length - 1], blp = bp[bp.length - 1];
-    if (afl.x !== bfl.x || afl.y !== bfl.y || alp.x !== blp.x || alp.y !== blp.y) return false;
+  if (ap !== bp) {
+    for (let i = 0; i < ap.length; i++) {
+      if (ap[i].x !== bp[i].x || ap[i].y !== bp[i].y) return false;
+    }
   }
   return true;
 }
@@ -111,14 +105,17 @@ export function mergeElementLists({
   const byId = new Map<string, WhiteboardElement>();
   const order: string[] = [];
 
+  let changed = false;
+
   // Local state first, so its z-order is preserved.
   for (const element of local) {
-    if (tombstones.has(element.id)) continue;
+    if (tombstones.has(element.id)) {
+      changed = true;
+      continue;
+    }
     byId.set(element.id, element);
     order.push(element.id);
   }
-
-  let changed = false;
 
   for (const remote of incoming) {
     if (!remote || typeof remote.id !== "string") continue;
@@ -145,17 +142,7 @@ export function mergeElementLists({
     }
   }
 
-  // Drop anything that got tombstoned by a peer mid-merge.
-  for (const id of tombstones) {
-    if (byId.has(id)) {
-      byId.delete(id);
-      changed = true;
-    }
-  }
-
-  const merged = order
-    .filter((id) => byId.has(id))
-    .map((id) => byId.get(id) as WhiteboardElement);
+  const merged = order.map((id) => byId.get(id) as WhiteboardElement);
 
   // A peer's layer change arrives as new layer numbers on the elements: arrange the array by them.
   const elements = sortByLayer(merged);
