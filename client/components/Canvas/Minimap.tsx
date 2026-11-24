@@ -4,14 +4,16 @@ import { useBoardStore } from "@/store/boardStore";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Map, Minimize2, Maximize2, LocateFixed } from "lucide-react";
 
+const EMPTY_ELEMENTS = [] as const;
+
 export function Minimap() {
-  const elements = useBoardStore((state) => state.elements);
+  const [isOpen, setIsOpen] = useState(false);
+  const elements = useBoardStore((state) => isOpen ? state.elements : EMPTY_ELEMENTS);
   const viewport = useBoardStore((state) => state.viewport);
   const setViewport = useBoardStore((state) => state.setViewport);
   const theme = useBoardStore((state) => state.theme);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isOpen, setIsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const MINIMAP_WIDTH = 200;

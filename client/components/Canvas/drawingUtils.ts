@@ -86,19 +86,12 @@ export function createElement(
 
 export function updateElementDraft(
   element: WhiteboardElement,
-  point: Point
+  point: Point,
+  strokePoints: Point[] = [point]
 ): WhiteboardElement {
-  if (element.type === "pencil") {
-    return {
-      ...element,
-      points: [...element.points, point],
-      width: point.x - element.x,
-      height: point.y - element.y
-    };
-  }
-
   return {
     ...element,
+    ...(element.type === "pencil" ? { points: [...element.points, ...strokePoints] } : {}),
     width: point.x - element.x,
     height: point.y - element.y
   };

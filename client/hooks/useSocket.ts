@@ -54,27 +54,29 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
         : undefined;
     }
 
-    function scheduleFrame() {
-      if (frameRef.current !== null) return;
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null;
-        const queue = queueRef.current;
-        const socket = joinedSocket();
-        if (socket) {
-          if (queue.cursor) socket.volatile.emit("cursor-position", { boardId, cursor: queue.cursor });
-          if (queue.laser) socket.volatile.emit("laser-point", { boardId, ...queue.laser });
-          for (const progress of queue.strokes.values()) socket.emit("draw-progress", { boardId, ...progress });
-          if (queue.updates.size === 1) {
-            socket.emit("update-element", { boardId, element: queue.updates.values().next().value });
-          } else if (queue.updates.size > 1) {
-            socket.emit("replace-elements", { boardId, elements: Array.from(queue.updates.values()), preview: true });
-          }
+    function flushPointerUpdates() {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      const queue = queueRef.current;
+      const socket = joinedSocket();
+      if (socket) {
+        if (queue.cursor) socket.volatile.emit("cursor-position", { boardId, cursor: queue.cursor });
+        if (queue.laser) socket.volatile.emit("laser-point", { boardId, ...queue.laser });
+        for (const progress of queue.strokes.values()) socket.emit("draw-progress", { boardId, ...progress });
+        if (queue.updates.size === 1) {
+          socket.emit("update-element", { boardId, element: queue.updates.values().next().value });
+        } else if (queue.updates.size > 1) {
+          socket.emit("replace-elements", { boardId, elements: Array.from(queue.updates.values()), preview: true });
         }
-        queue.cursor = null;
-        queue.laser = null;
-        queue.strokes.clear();
-        queue.updates.clear();
-      });
+      }
+      queue.cursor = null;
+      queue.laser = null;
+      queue.strokes.clear();
+      queue.updates.clear();
+    }
+
+    function scheduleFrame() {
+      if (frameRef.current === null) frameRef.current = window.requestAnimationFrame(flushPointerUpdates);
     }
 
     function emitReplace(_elements?: WhiteboardElement[], replay = false) {
@@ -107,6 +109,7 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
     }
 
     return {
+      flushPointerUpdates,
       emitDraw(element: WhiteboardElement) {
         if (useBoardStore.getState().isLocked) return;
         const socket = joinedSocket();
@@ -199,9 +202,12 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
       const connection = { socket: activeSocket, boardId, joined: false };
       connectionRef.current = connection;
 
+      let nameAtJoin: string | null = null;
+
       function join() {
         if (activeSocket.connected) {
-          activeSocket.emit("join-board", { boardId, userName: getStoredName(), token: getToken(boardId) });
+          nameAtJoin = getStoredName();
+          activeSocket.emit("join-board", { boardId, userName: nameAtJoin, token: getToken(boardId) });
         }
       }
 
@@ -229,7 +235,13 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
         state().mergeRemoteElements(message.elements, message.deletedIds, message.version, "snapshot");
         const wasJoined = connection.joined;
         connection.joined = true;
-        if (!wasJoined) collaboration.emitReplace(undefined, true);
+        if (!wasJoined) {
+          const name = getStoredName();
+          if (name && name !== nameAtJoin) {
+            activeSocket.emit("update-user-name", { boardId, name });
+          }
+          collaboration.emitReplace(undefined, true);
+        }
       });
       activeSocket.on("board:committed", (message: StateMessage) => {
         if (message.boardId === boardId) {

@@ -37,7 +37,10 @@ type PropertiesPanelProps = {
 export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
   const theme = useBoardStore((state) => state.theme);
   const isLight = theme === "light";
-  const elements = useBoardStore((state) => state.elements);
+  const selectedElement = useBoardStore((state) => {
+    if (!state.isPropertiesOpen || state.tool !== "select" || !state.selectedElementId) return;
+    return state.elements.find((element) => element.id === state.selectedElementId);
+  });
   const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const selectedElementId = useBoardStore((state) => state.selectedElementId);
   const tool = useBoardStore((state) => state.tool);
@@ -91,11 +94,6 @@ export function PropertiesPanel({ collaboration }: PropertiesPanelProps) {
   if (!isPropertiesOpen) {
     return null;
   }
-
-  // Get active selected element if single selection
-  const selectedElement = hasSelection
-    ? elements.find((e) => e.id === selectedElementIds[0])
-    : null;
 
   const currentStroke = selectedElement?.strokeColor ?? strokeColor;
   const currentFill = selectedElement?.fillColor ?? fillColor;

@@ -1,6 +1,7 @@
 "use client";
 
 import { createBoard } from "@/lib/api";
+import { BoardLoadingScreen } from "@/components/Common/BoardLoadingScreen";
 import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import { DashboardVideoPreview } from "@/components/Common/DashboardVideoPreview";
 import { useRouter } from "next/navigation";
@@ -17,27 +18,52 @@ import {
   Layers,
   ArrowRight,
   Download,
-  Loader2,
   PenTool,
   Check
 } from "lucide-react";
 
 export default function HomePage() {
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [isNavigating, startTransition] = useTransition();
+  const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [visibleItems, setVisibleItems] = useState<Record<string, boolean>>({});
+  const createButton = useRef<HTMLButtonElement>(null);
+  const createRequest = useRef<AbortController | null>(null);
+  const isOpening = isCreating || isNavigating;
 
-  const handleCreateBoard = () => {
-    startTransition(async () => {
-      try {
-        setError(null);
-        const board = await createBoard();
-        router.push(`/board/${board.id}`);
-      } catch {
+  useEffect(() => () => {
+    const request = createRequest.current;
+    createRequest.current = null;
+    request?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (error && !isOpening) createButton.current?.focus();
+  }, [error, isOpening]);
+
+  const handleCreateBoard = async () => {
+    if (createRequest.current || isNavigating) return;
+    const request = new AbortController();
+    createRequest.current = request;
+    setError(null);
+    setIsCreating(true);
+    const timeout = window.setTimeout(() => request.abort(), 30_000);
+
+    try {
+      const board = await createBoard(request.signal);
+      if (!request.signal.aborted) startTransition(() => router.push(`/board/${board.id}`));
+    } catch {
+      if (createRequest.current === request) {
         setError("Could not create a board. Check your connection and try again.");
       }
-    });
+    } finally {
+      window.clearTimeout(timeout);
+      if (createRequest.current === request) {
+        createRequest.current = null;
+        setIsCreating(false);
+      }
+    }
   };
 
   // Scroll animation observer
@@ -146,7 +172,7 @@ export default function HomePage() {
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif"
       }}
     >
-      <div style={{ maxWidth: "1200px", width: "100%" }}>
+      <div inert={isOpening} style={{ maxWidth: "1200px", width: "100%" }}>
         {/* Navigation / Header */}
         <header
           style={{
@@ -246,7 +272,8 @@ export default function HomePage() {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
             <button
               onClick={handleCreateBoard}
-              disabled={isPending}
+              disabled={isOpening}
+              ref={createButton}
               id="hero-create-board-btn"
               style={{
                 backgroundColor: "#6366f1",
@@ -256,7 +283,7 @@ export default function HomePage() {
                 fontSize: "1.05rem",
                 fontWeight: 600,
                 borderRadius: "12px",
-                cursor: isPending ? "wait" : "pointer",
+                cursor: "pointer",
                 boxShadow: "0 4px 16px rgba(99, 102, 241, 0.4)",
                 transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
                 display: "inline-flex",
@@ -273,22 +300,13 @@ export default function HomePage() {
                 e.currentTarget.style.backgroundColor = "#6366f1";
               }}
             >
-              {isPending ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" />
-                  <span>Launching Canvas...</span>
-                </>
-              ) : (
-                <>
-                  <span>Create New Board</span>
-                  <ArrowRight size={18} />
-                </>
-              )}
+              <span>Create New Board</span>
+              <ArrowRight size={18} />
             </button>
-            <span style={{ fontSize: "12px", color: "#64748b" }}>Instant launch • No account required</span>
+            <span style={{ fontSize: "12px", color: "#64748b" }}>No account required</span>
           </div>
 
-          {error && <p style={{ color: "#ef4444", marginTop: "1rem", fontSize: "14px" }}>{error}</p>}
+          {error && <p role="alert" style={{ color: "#ef4444", marginTop: "1rem", fontSize: "14px" }}>{error}</p>}
 
           {/* Interactive Canvas Demo Video (Infinite Loop) */}
           <DashboardVideoPreview />
@@ -442,6 +460,7 @@ export default function HomePage() {
           background-color: #141624 !important;
         }
       `}</style>
+      {isOpening && <BoardLoadingScreen />}
     </main>
   );
 }

@@ -27,8 +27,7 @@ import {
   useEffect,
   useRef,
   type PointerEvent as ReactPointerEvent,
-  type RefObject,
-  type WheelEvent as ReactWheelEvent
+  type RefObject
 } from "react";
 
 type CollaborationApi = {
@@ -43,6 +42,7 @@ type CollaborationApi = {
   }) => void;
   emitElementUpdate: (element: WhiteboardElement) => void;
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
+  flushPointerUpdates?: () => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
   emitLaser?: (point: Point, color?: string) => void;
   requestResync?: () => void;
@@ -60,7 +60,7 @@ type InteractionState =
       mode: "drawing";
       elementId: string;
       previousElements: WhiteboardElement[];
-      announced?: boolean;
+      isPencil: boolean;
     }
   | {
       mode: "dragging";
@@ -100,6 +100,9 @@ type InteractionState =
       viewportOrigin: Point;
     };
 
+type PointerSample = Pick<PointerEvent, "clientX" | "clientY">;
+type PointerMove = PointerSample & Pick<PointerEvent, "buttons">;
+
 const GRID_SIZE = 48;
 const ZOOM_IN_FACTOR = 1.035;
 const ZOOM_OUT_FACTOR = 0.965;
@@ -136,12 +139,34 @@ export function useCanvas({
   });
   const devicePixelRatioRef = useRef(1);
   const frameRef = useRef<number | null>(null);
+  const paintPending = useRef(false);
+  const pendingMove = useRef<PointerMove | null>(null);
+  const pendingStroke = useRef<PointerSample[]>([]);
+
+  function flushPointerMove() {
+    const move = pendingMove.current;
+    if (!move) return;
+    const stroke = pendingStroke.current;
+    pendingMove.current = null;
+    pendingStroke.current = [];
+    applyPointerMove(move, stroke);
+    collaboration.flushPointerUpdates?.();
+  }
 
   function scheduleRender() {
+    paintPending.current = true;
+    scheduleFrame();
+  }
+
+  function scheduleFrame() {
     if (frameRef.current !== null) return;
     frameRef.current = requestAnimationFrame(() => {
+      flushPointerMove();
+      if (paintPending.current) {
+        paintPending.current = false;
+        render();
+      }
       frameRef.current = null;
-      render();
       if (useBoardStore.getState().laserPoints.length) {
         useBoardStore.getState().clearExpiredLaserPoints();
         if (useBoardStore.getState().laserPoints.length) scheduleRender();
@@ -172,8 +197,12 @@ export function useCanvas({
 
     const observer = new ResizeObserver(resizeCanvas);
     observer.observe(container);
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      canvas.removeEventListener("wheel", handleWheel);
+    };
   }, [canvasRef, containerRef]);
 
   const activePointersRef = useRef<Map<number, Point>>(new Map());
@@ -266,9 +295,11 @@ export function useCanvas({
     context.restore();
   };
 
-  const getCanvasPoint = (event: PointerEvent | ReactPointerEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    const currentViewport = useBoardStore.getState().viewport;
+  const getCanvasPoint = (
+    event: PointerSample,
+    rect = canvasRef.current?.getBoundingClientRect(),
+    currentViewport = useBoardStore.getState().viewport
+  ) => {
 
     if (!rect) {
       return { x: 0, y: 0 };
@@ -281,6 +312,7 @@ export function useCanvas({
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    flushPointerMove();
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {}
@@ -550,13 +582,9 @@ export function useCanvas({
       mode: "drawing",
       elementId: element.id,
       previousElements: currentElements,
-      announced: false
+      isPencil: element.type === "pencil"
     };
-
-    if (!interactionRef.current.announced) {
-      interactionRef.current.announced = true;
-      collaboration.emitDraw(element);
-    }
+    collaboration.emitDraw(element);
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -564,6 +592,24 @@ export function useCanvas({
       activePointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     }
 
+    const move = { clientX: event.clientX, clientY: event.clientY, buttons: event.buttons };
+    const interaction = interactionRef.current;
+    if (interaction.mode === "erasing") {
+      applyPointerMove(move, []);
+      return;
+    }
+
+    pendingMove.current = move;
+    if (interaction.mode === "drawing" && interaction.isPencil) {
+      const coalesced = event.nativeEvent.getCoalescedEvents?.();
+      for (const { clientX, clientY } of coalesced?.length ? coalesced : [move]) {
+        pendingStroke.current.push({ clientX, clientY });
+      }
+    }
+    scheduleFrame();
+  };
+
+  function applyPointerMove(event: PointerMove, stroke: PointerSample[]) {
     if (interactionRef.current.mode === "pinch-pan") {
       if (activePointersRef.current.size >= 2) {
         const pts = Array.from(activePointersRef.current.values());
@@ -591,8 +637,10 @@ export function useCanvas({
       return;
     }
 
-    const point = getCanvasPoint(event);
-    const { elements: currentElements, viewport: currentViewport } = useBoardStore.getState();
+    const { elements: currentElements, viewport: currentViewport, tool, strokeColor } = useBoardStore.getState();
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const point = getCanvasPoint(event, bounds, currentViewport);
     collaboration.emitCursor(point);
 
     if (tool === "laser" && event.buttons > 0) {
@@ -622,40 +670,26 @@ export function useCanvas({
     }
 
     if (interaction.mode === "drawing") {
-      const before = currentElements.find(
-        (element) => element.id === interaction.elementId
-      );
-      const nextElements = currentElements.map((element) =>
-        element.id === interaction.elementId
-          ? updateElementDraft(element, point)
-          : element
-      );
+      const index = currentElements.findIndex((element) => element.id === interaction.elementId);
+      if (index < 0) return;
+
+      const points = stroke.map((sample) => getCanvasPoint(sample, bounds, currentViewport));
+      const element = updateElementDraft(currentElements[index], point, points);
+      const nextElements = currentElements.slice();
+      nextElements[index] = element;
       setElements(nextElements);
-      const element = nextElements.find(
-        (candidate) => candidate.id === interaction.elementId
-      );
-      if (element) {
-        const previousPoints = before?.points ?? [];
-        const currentPoints = element.points ?? [];
-        const grewBy = currentPoints.length - previousPoints.length;
-        // Pencil/multi-point strokes stream only the new points; re-sending the
-        // whole element each move is quadratic and floods small instances.
-        if (
-          grewBy > 0 &&
-          collaboration.emitDrawProgress &&
-          element.type === "pencil"
-        ) {
-          collaboration.emitDrawProgress({
-            elementId: element.id,
-            points: currentPoints.slice(previousPoints.length),
-            x: element.x,
-            y: element.y,
-            width: element.width,
-            height: element.height
-          });
-        } else {
-          collaboration.emitElementUpdate(element);
-        }
+
+      if (element.type === "pencil" && collaboration.emitDrawProgress) {
+        collaboration.emitDrawProgress({
+          elementId: element.id,
+          points,
+          x: element.x,
+          y: element.y,
+          width: element.width,
+          height: element.height
+        });
+      } else {
+        collaboration.emitElementUpdate(element);
       }
       return;
     }
@@ -774,9 +808,10 @@ export function useCanvas({
     if (interaction.mode === "erasing") {
       eraseAtPoint(point);
     }
-  };
+  }
 
   const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    flushPointerMove();
     if (event?.pointerId !== undefined) {
       activePointersRef.current.delete(event.pointerId);
     }
@@ -859,7 +894,7 @@ export function useCanvas({
     interactionRef.current = { mode: "idle" };
   };
 
-  const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+  function handleWheel(event: WheelEvent) {
     event.preventDefault();
 
     const { viewport } = useBoardStore.getState();
@@ -882,14 +917,9 @@ export function useCanvas({
       x: pointerX - worldX * nextZoom,
       y: pointerY - worldY * nextZoom
     });
-  };
+  }
 
-  return {
-    handlePointerDown,
-    handlePointerMove,
-    handlePointerUp,
-    handleWheel
-  };
+  return { handlePointerDown, handlePointerMove, handlePointerUp };
 
   function eraseAtPoint(point: Point) {
     const nextElements = useBoardStore.getState().eraseAtPoint(point, hitTestElement);

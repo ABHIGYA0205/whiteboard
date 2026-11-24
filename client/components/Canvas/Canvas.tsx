@@ -13,6 +13,7 @@ type CollaborationApi = {
   emitElementUpdate: (element: WhiteboardElement) => void;
   emitCursor: (cursor: Omit<CursorPosition, "userId">) => void;
   emitCursorLeave?: () => void;
+  flushPointerUpdates?: () => void;
   emitReplace?: (elements: WhiteboardElement[]) => void;
   emitLaser?: (point: { x: number; y: number }, color?: string) => void;
   requestResync?: () => void;
@@ -221,7 +222,6 @@ export function Canvas({ collaboration }: CanvasProps) {
           if (!event.currentTarget.hasPointerCapture(event.pointerId)) canvas.handlePointerUp(event);
         }}
         onDoubleClick={handleDoubleClick}
-        onWheel={canvas.handleWheel}
         ref={canvasRef}
         aria-label="Interactive drawing canvas"
         role="region"

@@ -105,6 +105,16 @@ try {
     const session = await page.context().newCDPSession(page);
     await session.send("Network.enable");
     frameCounts[index] = { progress: 0, cursors: 0 };
+    await page.evaluate(() => {
+      window.localStrokeUpdates = 0;
+      window.__boardStore.subscribe((state, previous) => {
+        const [id] = state.activeElementIds;
+        if (!id || state.elements === previous.elements) return;
+        const current = state.elements.find((element) => element.id === id);
+        const before = previous.elements.find((element) => element.id === id);
+        if (current && before && current !== before) window.localStrokeUpdates++;
+      });
+    });
     session.on("Network.webSocketFrameSent", ({ response }) => {
       if (response.payloadData.startsWith('42["draw-progress",')) frameCounts[index].progress++;
       if (response.payloadData.startsWith('42["cursor-position",')) frameCounts[index].cursors++;
@@ -134,17 +144,19 @@ try {
   }, starts[index])));
   const live = await Promise.all(pages.map((page) => eventually(
     () => pencil(page),
-    (strokes) => strokes.length === 3 && strokes.every(({ points }) => points.length > 15),
+    (strokes) => strokes.length === 3 && strokes.every(({ points }) => points.length === 81),
     "All in-progress strokes must reach each editor"
   )));
   const elapsed = Math.round(performance.now() - started);
   assert.ok(live.every((strokes) => strokes.length === 3));
   assert.ok(frameCounts.every(({ progress }) => progress > 0 && progress < 80), JSON.stringify(frameCounts));
+  const localUpdates = await Promise.all(pages.map((page) => page.evaluate(() => window.localStrokeUpdates)));
+  assert.ok(localUpdates.every((count) => count > 0 && count <= 12), JSON.stringify(localUpdates));
   await Promise.all(pages.map((page) => page.mouse.up()));
   const durable = await eventually(getBoard, (data) =>
     data.elements.filter(({ type }) => type === "pencil").length === 3, "All strokes must survive autosave");
   console.log(`PASS  3 browsers drew simultaneously; all showed 3 live strokes in ${elapsed} ms including pointer input`);
-  console.log(`      WebSocket frames during the gestures: ${JSON.stringify(frameCounts)}`);
+  console.log(`      Local updates per 80 samples: ${localUpdates.join(", ")}. Socket frames: ${JSON.stringify(frameCounts)}`);
 
   // Reloading a browser verifies the join snapshot and persisted drawing data.
   await carol.reload();
@@ -196,6 +208,38 @@ try {
   await eventually(getBoard, (data) => data.elements.filter(({ type }) => type === "pencil").length === 5,
     "Opening a viewer link in another tab must preserve the owner's write access");
   console.log("PASS  collaborative undo/redo and independent viewer permissions across tabs");
+
+  const joiningContext = await browser.newContext({ viewport: { width: 1300, height: 850 } });
+  const joining = await joiningContext.newPage();
+  let releaseJoin;
+  let updateName;
+  await joining.routeWebSocket(/\/socket\.io\//, (connection) => {
+    const server = connection.connectToServer();
+    updateName = (name) => server.send("42" + JSON.stringify(["update-user-name", { boardId: board.id, name }]));
+    server.onMessage((message) => {
+      if (typeof message === "string" && message.startsWith('42["board:state",')) {
+        releaseJoin = () => connection.send(message);
+      } else {
+        connection.send(message);
+      }
+    });
+  });
+  await joining.goto(web + path + "?share=" + encodeURIComponent(shared.token));
+  await eventually(() => releaseJoin, Boolean, "Guest must be waiting on the initial board snapshot");
+  await joining.getByRole("textbox", { name: "Your name" }).fill("Avery");
+  await joining.getByRole("button", { name: "Continue to Board" }).click();
+  releaseJoin();
+  await alice.getByTitle("Avery", { exact: true }).waitFor();
+  await joining.mouse.move(710, 555);
+  await alice.locator(".remote-cursor-badge").getByText("Avery", { exact: true }).waitFor();
+
+  // Rename over the joined connection without moving the guest's pointer.
+  updateName("Avery Kim");
+  await alice.getByTitle("Avery Kim", { exact: true }).waitFor();
+  await alice.locator(".remote-cursor-badge").getByText("Avery Kim", { exact: true }).waitFor();
+  await joiningContext.close();
+  console.log("PASS  the owner sees names entered during join and subsequent cursor-label renames");
+
 } finally {
   await browser.close();
   await request(path, { method: "DELETE", token });

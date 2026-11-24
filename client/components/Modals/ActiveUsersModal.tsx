@@ -27,7 +27,6 @@ export function ActiveUsersModal({
   const currentUserId = useBoardStore((state) => state.currentUserId);
   const followingUserId = useBoardStore((state) => state.followingUserId);
   const setFollowingUserId = useBoardStore((state) => state.setFollowingUserId);
-  const remoteCursors = useBoardStore((state) => state.remoteCursors);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -58,9 +57,7 @@ export function ActiveUsersModal({
 
   if (!isOpen) return null;
 
-  const effectiveSelfId =
-    currentUserId ||
-    (typeof window !== "undefined" ? sessionStorage.getItem("whiteboard_user_id") : null);
+  const effectiveSelfId = currentUserId;
 
   // Accurate deduplication of active participants by userId
   const userMap = new Map<string, PresenceUser>();
@@ -73,21 +70,6 @@ export function ActiveUsersModal({
         name: isSelf && currentUserName ? currentUserName : (u.name || `User-${u.userId.slice(0, 4)}`),
         color: u.color || "#6366f1"
       });
-    }
-  }
-
-  // Also incorporate any active live cursors seen on canvas
-  const now = Date.now();
-  for (const cursor of Object.values(remoteCursors)) {
-    if (cursor && cursor.userId && !userMap.has(cursor.userId)) {
-      if (now - (cursor.lastSeen || 0) < 3500) {
-        const isSelf = Boolean(effectiveSelfId) && cursor.userId === effectiveSelfId;
-        userMap.set(cursor.userId, {
-          userId: cursor.userId,
-          name: isSelf && currentUserName ? currentUserName : (cursor.name || `User-${cursor.userId.slice(0, 4)}`),
-          color: cursor.color || "#3b82f6"
-        });
-      }
     }
   }
 

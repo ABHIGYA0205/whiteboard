@@ -88,8 +88,8 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
   return response.json() as Promise<T>;
 }
 
-export async function createBoard(): Promise<BoardDocument> {
-  const board = await request<BoardDocument & { ownerToken?: string }>("/board", { method: "POST" });
+export async function createBoard(signal?: AbortSignal): Promise<BoardDocument> {
+  const board = await request<BoardDocument & { ownerToken?: string }>("/board", { method: "POST", signal });
   if (board.id && board.ownerToken) setToken(board.id, board.ownerToken);
   return board;
 }

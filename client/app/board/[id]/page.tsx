@@ -18,6 +18,7 @@ import { AiDiagramModal } from "@/components/Modals/AiDiagramModal";
 import { UserNameModal } from "@/components/Modals/UserNameModal";
 import { ActiveUsersModal } from "@/components/Modals/ActiveUsersModal";
 import { Minimap } from "@/components/Canvas/Minimap";
+import { BoardLoadingScreen } from "@/components/Common/BoardLoadingScreen";
 import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import {
   Undo2,
@@ -45,7 +46,7 @@ export default function BoardPage({ params }: BoardPageProps) {
   const redo = useBoardStore((state) => state.redo);
   const canUndo = useBoardStore((state) => state.history.length > 0);
   const canRedo = useBoardStore((state) => state.future.length > 0);
-  const viewport = useBoardStore((state) => state.viewport);
+  const zoom = useBoardStore((state) => state.viewport.zoom);
   const setZoom = useBoardStore((state) => state.setZoom);
   const presenceUsers = useBoardStore((state) => state.presenceUsers);
   const currentUserId = useBoardStore((state) => state.currentUserId);
@@ -109,6 +110,7 @@ export default function BoardPage({ params }: BoardPageProps) {
     if (!stored) {
       setIsUserNameModalOpen(true);
     } else {
+      sessionStorage.setItem("whiteboard_user_name", stored);
       setCurrentUserName(stored);
     }
 
@@ -218,7 +220,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           setIsLocked(true);
           setIsUnauthenticated(true);
         } else {
-          setLoadError(error?.status === 404 ? "Board not found." : "Could not load the board. Try again.");
+          setLoadError(error?.status === 404 ? "Board not found." : "Could not load the board.");
         }
       } finally {
         if (!controller.signal.aborted) setLoadedBoardId(boardId);
@@ -360,19 +362,19 @@ export default function BoardPage({ params }: BoardPageProps) {
   });
 
   if (loadedBoardId !== boardId && !loadError) {
-    return <main className="status-shell">Loading board...</main>;
+    return <BoardLoadingScreen />;
   }
 
   if (loadError) {
     return (
-      <main className="status-shell">
-        <p>{loadError}</p>
-        <button type="button" onClick={() => {
+      <BoardLoadingScreen
+        error={loadError}
+        onRetry={() => {
           setLoadedBoardId(null);
           setLoadError(null);
           setLoadAttempt((attempt) => attempt + 1);
-        }}>Retry</button>
-      </main>
+        }}
+      />
     );
   }
 
@@ -467,7 +469,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           title="Reset zoom to 100%"
           aria-label="Reset zoom"
         >
-          {Math.round(viewport.zoom * 100)}%
+          {Math.round(zoom * 100)}%
         </button>
       </div>
 
@@ -716,7 +718,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         <div className="control-group unified-controls">
           <button
             className="control-button"
-            onClick={() => setZoom(viewport.zoom * 0.9)}
+            onClick={() => setZoom(zoom * 0.9)}
             title="Zoom out"
             aria-label="Zoom out"
           >
@@ -728,11 +730,11 @@ export default function BoardPage({ params }: BoardPageProps) {
             title="Reset zoom to 100%"
             aria-label="Reset zoom"
           >
-            {Math.round(viewport.zoom * 100)}%
+            {Math.round(zoom * 100)}%
           </button>
           <button
             className="control-button"
-            onClick={() => setZoom(viewport.zoom * 1.1)}
+            onClick={() => setZoom(zoom * 1.1)}
             title="Zoom in"
             aria-label="Zoom in"
           >

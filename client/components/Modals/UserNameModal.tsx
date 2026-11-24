@@ -48,10 +48,6 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
     e?.preventDefault();
     const trimmed = name.trim();
     if (trimmed) {
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("whiteboard_user_name", trimmed);
-        localStorage.setItem("whiteboard_user_name", trimmed);
-      }
       onSave(trimmed);
       onClose?.();
     }
@@ -59,10 +55,6 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
 
   const handleContinueAsGuest = () => {
     const guestName = `Guest-${Math.floor(1000 + Math.random() * 9000)}`;
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem("whiteboard_user_name", guestName);
-      localStorage.setItem("whiteboard_user_name", guestName);
-    }
     onSave(guestName);
     onClose?.();
   };

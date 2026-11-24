@@ -172,7 +172,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const tool = useBoardStore((state) => state.tool);
   const setTool = useBoardStore((state) => state.setTool);
-  const elements = useBoardStore((state) => state.elements);
   const commitElements = useBoardStore((state) => state.commitElements);
   const selectElement = useBoardStore((state) => state.selectElement);
   const isLocked = useBoardStore((state) => state.isLocked);
@@ -180,7 +179,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const isPropertiesOpen = useBoardStore((state) => state.isPropertiesOpen);
   const togglePropertiesOpen = useBoardStore((state) => state.togglePropertiesOpen);
   const clearBoard = useBoardStore((state) => state.clearBoard);
-  const viewport = useBoardStore((state) => state.viewport);
 
   useEffect(() => {
     if (isViewer && tool !== "select" && tool !== "pan") {
@@ -211,6 +209,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           // Fall back to direct data URL if server upload endpoint is unavailable
         }
 
+        const { viewport } = useBoardStore.getState();
         const worldX = -viewport.x / viewport.zoom + 150;
         const worldY = -viewport.y / viewport.zoom + 150;
 
@@ -241,6 +240,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   };
 
   const handleEnhance = () => {
+    const { elements } = useBoardStore.getState();
     const activeSelectedIds = selectedElementIds.length > 0
       ? selectedElementIds
       : (selectedElementId ? [selectedElementId] : []);
@@ -327,6 +327,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   };
 
   const handleImageGenerated = (imageUrl: string, naturalWidth: number, naturalHeight: number) => {
+    const { viewport } = useBoardStore.getState();
     // 2.4: Size: Height = clamp(sketch bounding-box height, 240, 600), or 400 without sketch.
     // Width = height * naturalWidth / naturalHeight. Never stretch.
     const targetHeight = modalBounds

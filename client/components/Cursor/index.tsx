@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useBoardStore } from "@/store/boardStore";
 
 function getContrastTextColor(hexColor?: string): string {
@@ -16,6 +17,8 @@ function getContrastTextColor(hexColor?: string): string {
 export function CursorLayer() {
   const cursors = useBoardStore((state) => state.remoteCursors);
   const viewport = useBoardStore((state) => state.viewport);
+  const presence = useBoardStore((state) => state.presenceUsers);
+  const names = useMemo(() => new Map(presence.map(({ userId, name }) => [userId, name])), [presence]);
 
   return (
     <div className="cursor-layer" aria-hidden="true">
@@ -30,7 +33,7 @@ export function CursorLayer() {
           rawColor.toLowerCase() === "#f8fafc";
         const color = isTooLight ? "#6366f1" : rawColor;
         const textColor = getContrastTextColor(color);
-        const displayName = cursor.name || `User-${cursor.userId.slice(0, 4)}`;
+        const displayName = names.get(cursor.userId) || cursor.name || `User-${cursor.userId.slice(0, 4)}`;
 
         return (
           <div
