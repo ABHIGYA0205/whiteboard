@@ -6,7 +6,8 @@ import type {
 import { resolveImageUrl } from "@/lib/api";
 import { sketchInkColor } from "@/lib/sketchInk";
 
-const HANDLE_SIZE = 12;
+const HANDLE_SIZE = 6;
+export const BOARD_TEXT_FONT = '"Avenir Next", "Segoe UI", sans-serif';
 
 // Module-level cache so loaded images persist across render cycles
 const imageCache = new Map<string, HTMLImageElement>();
@@ -133,7 +134,8 @@ export function drawElement(
   element: WhiteboardElement,
   isSelected: boolean,
   showSelection: boolean,
-  theme: "dark" | "light" = "dark"
+  theme: "dark" | "light" = "dark",
+  { hideText = false, zoom = 1 }: { hideText?: boolean; zoom?: number } = {}
 ) {
   const effectiveStrokeColor = getContrastStrokeColor(element.strokeColor, theme);
   context.save();
@@ -200,7 +202,7 @@ export function drawElement(
     }
     context.stroke();
 
-    if (element.text) {
+    if (!hideText && element.text) {
       drawShapeText(context, element.text, bounds, effectiveStrokeColor, element.fontSize || 16);
     }
   }
@@ -220,7 +222,7 @@ export function drawElement(
     }
     context.stroke();
 
-    if (element.text) {
+    if (!hideText && element.text) {
       drawShapeText(context, element.text, bounds, effectiveStrokeColor, element.fontSize || 16);
     }
   }
@@ -240,7 +242,7 @@ export function drawElement(
       applyFill();
     }
     context.stroke();
-    if (element.text) {
+    if (!hideText && element.text) {
       drawShapeText(context, element.text, bounds, effectiveStrokeColor, element.fontSize || 16);
     }
   }
@@ -262,8 +264,8 @@ export function drawElement(
     }
   }
 
-  if (element.type === "text") {
-    context.font = `${element.fontSize || 24}px "Avenir Next", "Segoe UI", sans-serif`;
+  if (element.type === "text" && !hideText) {
+    context.font = `${element.fontSize || 24}px ${BOARD_TEXT_FONT}`;
     context.fillStyle = effectiveStrokeColor; // text uses strokeColor for the actual text color
     context.textBaseline = "top";
     
@@ -294,7 +296,7 @@ export function drawElement(
     context.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
     context.stroke();
 
-    if (element.text) {
+    if (!hideText && element.text) {
       context.save();
       context.beginPath();
       context.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
@@ -429,25 +431,8 @@ export function drawElement(
     }
   }
 
-  if (isSelected && showSelection) {
-    context.strokeStyle = "#3b82f6";
-    context.lineWidth = 1.5;
-    context.setLineDash([5, 3]);
-    context.strokeRect(bounds.x - 3, bounds.y - 3, bounds.width + 6, bounds.height + 6);
-    context.setLineDash([]);
-
-    getResizeHandles(element).forEach((handle) => {
-      context.fillStyle = "#ffffff";
-      context.strokeStyle = "#3b82f6";
-      context.lineWidth = 2;
-      context.beginPath();
-      context.roundRect(handle.x, handle.y, HANDLE_SIZE, HANDLE_SIZE, 3);
-      context.fill();
-      context.stroke();
-    });
-  }
-
   context.restore();
+  if (isSelected && showSelection) drawSelectionOutline(context, bounds, zoom, theme);
 }
 
 export function hitTestElement(
@@ -497,18 +482,10 @@ export function hitTestElement(
 
 export function getResizeHandleAtPoint(
   point: Point,
-  element: WhiteboardElement
+  element: WhiteboardElement,
+  zoom = 1
 ): ResizeHandle | null {
-  const grabPad = 5;
-  const handle = getResizeHandles(element).find(
-    (candidate) =>
-      point.x >= candidate.x - grabPad &&
-      point.x <= candidate.x + HANDLE_SIZE + grabPad &&
-      point.y >= candidate.y - grabPad &&
-      point.y <= candidate.y + HANDLE_SIZE + grabPad
-  );
-
-  return handle?.id ?? null;
+  return getBoundingBoxResizeHandleAtPoint(point, getNormalizedBounds(element), zoom);
 }
 
 export function translateElement(
@@ -584,30 +561,6 @@ export function resizeElement(
           })
         : element.points
   };
-}
-
-function getResizeHandles(element: WhiteboardElement) {
-  const bounds = getNormalizedBounds(element);
-  const half = HANDLE_SIZE / 2;
-
-  return [
-    { id: "top-left" as const, x: bounds.x - half, y: bounds.y - half },
-    {
-      id: "top-right" as const,
-      x: bounds.x + bounds.width - half,
-      y: bounds.y - half
-    },
-    {
-      id: "bottom-left" as const,
-      x: bounds.x - half,
-      y: bounds.y + bounds.height - half
-    },
-    {
-      id: "bottom-right" as const,
-      x: bounds.x + bounds.width - half,
-      y: bounds.y + bounds.height - half
-    }
-  ];
 }
 
 function scalePencilPoints(
@@ -980,30 +933,26 @@ export function getCombinedBounds(elements: WhiteboardElement[]): { x: number; y
   };
 }
 
-export function getBoundingBoxResizeHandles(bounds: { x: number; y: number; width: number; height: number }) {
-  const half = HANDLE_SIZE / 2;
+function getBoundingBoxResizeHandles(bounds: { x: number; y: number; width: number; height: number }) {
   return [
-    { id: "top-left" as const, x: bounds.x - half, y: bounds.y - half },
-    { id: "top-right" as const, x: bounds.x + bounds.width - half, y: bounds.y - half },
-    { id: "bottom-left" as const, x: bounds.x - half, y: bounds.y + bounds.height - half },
-    { id: "bottom-right" as const, x: bounds.x + bounds.width - half, y: bounds.y + bounds.height - half }
+    { id: "top-left" as const, x: bounds.x, y: bounds.y },
+    { id: "top-right" as const, x: bounds.x + bounds.width, y: bounds.y },
+    { id: "bottom-left" as const, x: bounds.x, y: bounds.y + bounds.height },
+    { id: "bottom-right" as const, x: bounds.x + bounds.width, y: bounds.y + bounds.height }
   ];
 }
 
 export function getBoundingBoxResizeHandleAtPoint(
   point: Point,
-  bounds: { x: number; y: number; width: number; height: number }
+  bounds: { x: number; y: number; width: number; height: number },
+  zoom = 1
 ): ResizeHandle | null {
-  const grabPad = 6;
-  const handles = getBoundingBoxResizeHandles(bounds);
-  const found = handles.find(
-    (candidate) =>
-      point.x >= candidate.x - grabPad &&
-      point.x <= candidate.x + HANDLE_SIZE + grabPad &&
-      point.y >= candidate.y - grabPad &&
-      point.y <= candidate.y + HANDLE_SIZE + grabPad
-  );
-  return found?.id ?? null;
+  const radius = 11 / zoom;
+  const handles = getBoundingBoxResizeHandles(bounds)
+    .map(({ id, x, y }) => ({ id, distance: Math.hypot(point.x - x, point.y - y) }))
+    .filter(({ distance }) => distance <= radius)
+    .sort((a, b) => a.distance - b.distance);
+  return handles[0]?.id ?? null;
 }
 
 export function elementIntersectsBox(
@@ -1085,44 +1034,36 @@ export function resizeElementsGroup(
   });
 }
 
-export function drawMultiSelectionBox(
+function drawSelectionOutline(
   context: CanvasRenderingContext2D,
-  elements: WhiteboardElement[]
+  bounds: { x: number; y: number; width: number; height: number },
+  zoom: number,
+  theme: "dark" | "light"
 ) {
-  if (elements.length <= 1) return;
-  const bounds = getCombinedBounds(elements);
-  if (!bounds) return;
-
+  const size = HANDLE_SIZE / zoom;
   context.save();
-  // Draw subtle individual selection frames
-  elements.forEach((el) => {
-    const b = getNormalizedBounds(el);
-    context.strokeStyle = "rgba(59, 130, 246, 0.45)";
-    context.lineWidth = 1;
-    context.setLineDash([3, 3]);
-    context.strokeRect(b.x - 2, b.y - 2, b.width + 4, b.height + 4);
-  });
-
-  // Draw main collective bounding box
-  context.strokeStyle = "#3b82f6";
-  context.lineWidth = 1.5;
-  context.setLineDash([6, 4]);
-  context.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
+  context.lineWidth = 1 / zoom;
+  context.strokeStyle = theme === "light" ? "#6656c6" : "#a59af2";
+  context.fillStyle = theme === "light" ? "#ffffff" : "#161423";
   context.setLineDash([]);
-
-  // Draw 4 corner handles
-  const handles = getBoundingBoxResizeHandles(bounds);
-  handles.forEach((handle) => {
-    context.fillStyle = "#ffffff";
-    context.strokeStyle = "#3b82f6";
-    context.lineWidth = 2;
+  context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  for (const { x, y } of getBoundingBoxResizeHandles(bounds)) {
     context.beginPath();
-    context.roundRect(handle.x, handle.y, HANDLE_SIZE, HANDLE_SIZE, 3);
+    context.roundRect(x - size / 2, y - size / 2, size, size, 1.5 / zoom);
     context.fill();
     context.stroke();
-  });
-
+  }
   context.restore();
+}
+
+export function drawMultiSelectionBox(
+  context: CanvasRenderingContext2D,
+  elements: WhiteboardElement[],
+  zoom = 1,
+  theme: "dark" | "light" = "dark"
+) {
+  const bounds = getCombinedBounds(elements);
+  if (elements.length > 1 && bounds) drawSelectionOutline(context, bounds, zoom, theme);
 }
 
 export function drawMarqueeBox(

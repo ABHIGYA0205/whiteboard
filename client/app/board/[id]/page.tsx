@@ -43,13 +43,23 @@ type BoardPageProps = {
 function fitBoardContent(elements: WhiteboardElement[]) {
   const bounds = getCombinedBounds(elements);
   if (!bounds) return;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const zoom = Math.min(1, Math.max(0.02, Math.min((width - 72) / bounds.width, (height - 200) / bounds.height)));
+  const canvas = document.querySelector(".board-canvas")?.getBoundingClientRect();
+  const panel = document.querySelector(".excalidraw-properties-panel")?.getBoundingClientRect();
+  const width = canvas?.width ?? window.innerWidth;
+  const height = canvas?.height ?? window.innerHeight;
+  const margin = width < 600 ? 20 : 32;
+  const compact = width < 1280;
+  const top = 74;
+  const left = panel && !compact ? panel.right - (canvas?.left ?? 0) + margin : margin;
+  const panelTop = panel ? panel.top - (canvas?.top ?? 0) - margin : height;
+  const bottom = Math.max(top + 40, Math.min(height - 76, compact ? panelTop : height));
+  const frameWidth = Math.max(40, width - left - margin);
+  const frameHeight = bottom - top;
+  const zoom = Math.min(1, frameWidth / bounds.width, frameHeight / bounds.height);
   useBoardStore.getState().setViewport({
     zoom,
-    x: (width - bounds.width * zoom) / 2 - bounds.x * zoom,
-    y: (height - bounds.height * zoom) / 2 - bounds.y * zoom
+    x: left + (frameWidth - bounds.width * zoom) / 2 - bounds.x * zoom,
+    y: top + (frameHeight - bounds.height * zoom) / 2 - bounds.y * zoom
   });
 }
 

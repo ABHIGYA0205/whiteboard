@@ -285,7 +285,7 @@ export function Sidebar({ boardId, boardTitle, mobileTitleEditor, saveStatus, is
           </div>
           <span className="menu-item-shortcut">?</span>
         </button>
-        <button className="menu-item" onClick={() => { onFit(); setIsOpen(false); }} aria-label="Fit board to screen">
+        <button className="menu-item menu-item-start" onClick={() => { onFit(); setIsOpen(false); }} aria-label="Fit board to screen">
           <Scan size={16} />
           <span>Fit board to screen</span>
         </button>

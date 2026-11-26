@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import {
@@ -18,9 +19,9 @@ import styles from "./home.module.css";
 
 const starters = [
   { id: "kanban", name: "Kanban board", detail: "Track work from ready to done.", icon: LayoutGrid },
-  { id: "flowchart", name: "Process flow", detail: "Map steps, decisions, and handoffs.", icon: Workflow },
-  { id: "retro", name: "Sprint retro", detail: "Discuss what worked and what to change.", icon: StickyNote },
-  { id: "mindmap", name: "Mind map", detail: "Connect ideas around a central topic.", icon: GitFork }
+  { id: "flowchart", name: "Process flow", detail: "Map steps and decisions.", icon: Workflow },
+  { id: "retro", name: "Sprint retro", detail: "Reflect on the last sprint.", icon: StickyNote },
+  { id: "mindmap", name: "Mind map", detail: "Explore a central idea.", icon: GitFork }
 ];
 
 function TemplatePreview({ id }: { id: string }) {
@@ -144,17 +145,40 @@ export default function HomePage() {
 
         <div className={styles.container}>
           <section className={styles.intro} aria-labelledby="home-title">
-            <div>
-              <h1 id="home-title">Your workspace</h1>
-              <p>Pick up a recent board, join a teammate, or start with a template.</p>
+            <div className={styles.heroArt} aria-hidden="true">
+              <Image src="/workspace-ribbon.webp" alt="" fill unoptimized preload sizes="(max-width: 740px) 100vw, 65vw" />
             </div>
-            <button id="hero-create-board-btn" type="button" className={styles.primary} disabled={isOpening}
-              onClick={(event) => void openNewBoard(event.currentTarget)}>
-              <Plus size={19} /> Create New Board
-            </button>
+            <div className={styles.heroCopy}>
+              <h1 id="home-title">Where ideas<br /><em>take shape.</em></h1>
+              <p>Sketch, plan, and think together on a shared whiteboard.</p>
+              <button id="hero-create-board-btn" type="button" className={styles.primary} disabled={isOpening}
+                onClick={(event) => void openNewBoard(event.currentTarget)}>
+                <Plus size={18} /> Create New Board
+              </button>
+            </div>
           </section>
 
           {error && <p className={styles.notice} role="alert">{error}</p>}
+
+          <section id="templates" className={styles.templates} aria-labelledby="templates-title" tabIndex={-1}>
+            <div className={styles.sectionHeader}>
+              <h2 id="templates-title">Start with a template</h2>
+            </div>
+            <div className={styles.templateGrid}>
+              {starters.map((starter) => (
+                <button className={styles.template} key={starter.id} disabled={isOpening}
+                  onClick={(event) => void openNewBoard(event.currentTarget, starter)}>
+                  <TemplatePreview id={starter.id} />
+                  <span className={styles.templateInfo}>
+                    <span className={styles.templateName}><starter.icon size={17} strokeWidth={1.8} />
+                      <strong>{starter.name}</strong><ArrowUpRight size={15} className={styles.templateArrow} />
+                    </span>
+                    <span className={styles.templateDetail}>{starter.detail}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
 
           <div className={styles.boardGrid}>
             <section id="recent" className={styles.panel} aria-labelledby="recent-title" tabIndex={-1}>
@@ -214,26 +238,6 @@ export default function HomePage() {
               </form>
             </section>
           </div>
-
-          <section id="templates" className={styles.templates} aria-labelledby="templates-title" tabIndex={-1}>
-            <div className={styles.sectionHeader}>
-              <h2 id="templates-title">Templates</h2>
-            </div>
-            <div className={styles.templateGrid}>
-              {starters.map((starter) => (
-                <button className={styles.template} key={starter.id} disabled={isOpening}
-                  onClick={(event) => void openNewBoard(event.currentTarget, starter)}>
-                  <TemplatePreview id={starter.id} />
-                  <span className={styles.templateInfo}>
-                    <span className={styles.templateName}><starter.icon size={17} strokeWidth={1.8} />
-                      <strong>{starter.name}</strong><ArrowUpRight size={15} className={styles.templateArrow} />
-                    </span>
-                    <span className={styles.templateDetail}>{starter.detail}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
         </div>
       </div>
       {isOpening && <BoardLoadingScreen />}

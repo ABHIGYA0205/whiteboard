@@ -41,6 +41,10 @@ try {
   await page.addInitScript(({ id, token }) => {
     sessionStorage.setItem("whiteboard_user_name", "Responsive QA");
     sessionStorage.setItem("canvasflow:token:" + id, token);
+    localStorage.setItem("whiteboard_recent_boards", JSON.stringify([
+      { id, title: "Sample board", visitedAt: 2 },
+      { id: "another-sample", title: "Another board", visitedAt: 1 }
+    ]));
   }, { id: board.id, token: board.ownerToken });
   await page.goto(web);
 
@@ -52,6 +56,18 @@ try {
     for (const selector of ["header", "#recent", "#templates", "form"]) {
       const box = await page.locator(selector).boundingBox();
       assert.ok(box && box.x >= 0 && box.x + box.width <= width + 1, selector + " within " + width);
+    }
+    const recent = await page.getByRole("region", { name: "Recent boards" }).boundingBox();
+    const invite = await page.getByRole("region", { name: "Open a board link" }).boundingBox();
+    assert.ok(recent && invite && Math.abs(recent.width - invite.width) < 1, "Matched panel widths at " + width);
+    if (width > 740) {
+      assert.ok(Math.abs(recent.y - invite.y) < 1 && Math.abs(recent.height - invite.height) < 1, "Aligned panel edges at " + width);
+      const secondTemplate = await page.locator("#templates button").nth(1).boundingBox();
+      const thirdTemplate = await page.locator("#templates button").nth(2).boundingBox();
+      assert.ok(Math.abs(recent.x + recent.width - secondTemplate.x - secondTemplate.width) < 1);
+      assert.ok(Math.abs(invite.x - thirdTemplate.x) < 1);
+    } else {
+      assert.ok(invite.y >= recent.y + recent.height && Math.abs(invite.x - recent.x) < 1);
     }
   }
 
@@ -121,7 +137,7 @@ try {
     await checkModal("Templates Gallery");
     await openTool(/Generate editable diagram from text prompt|AI Prompt to Diagram/);
     await checkModal("AI Diagram Architect");
-    await openTool(/Enhance sketch with AI/);
+    await openTool(/Generate image/);
     await checkModal("AI Image Studio");
     await page.getByRole("button", { name: "Open menu" }).click();
     const menu = page.getByRole("dialog", { name: "Board settings and file menu" });

@@ -59,7 +59,7 @@ try {
     await page.mouse.up();
   }
   await page.locator(".tool-more-btn:visible").click();
-  await page.getByRole("button", { name: "Enhance sketch with AI", exact: true }).click();
+  await page.getByRole("button", { name: "Generate image", exact: true }).click();
   const studio = page.getByRole("dialog", { name: "AI Image Studio" });
   await studio.getByRole("textbox", { name: "Image prompt description" }).fill(prompt);
   if (!live) {

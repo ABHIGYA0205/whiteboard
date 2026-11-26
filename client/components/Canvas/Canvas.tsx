@@ -4,7 +4,7 @@ import { CursorLayer } from "@/components/Cursor";
 import { useCanvas } from "@/hooks/useCanvas";
 import { uploadImage, resolveImageUrl } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
-import { getNormalizedBounds, getContrastStrokeColor } from "@/components/Canvas/drawingUtils";
+import { BOARD_TEXT_FONT, getNormalizedBounds, getContrastStrokeColor } from "@/components/Canvas/drawingUtils";
 import type { CursorPosition, WhiteboardElement } from "@shared/types";
 import { useEffect, useRef } from "react";
 
@@ -22,6 +22,12 @@ type CollaborationApi = {
 type CanvasProps = {
   collaboration: CollaborationApi;
 };
+
+function updateElementText(element: WhiteboardElement, text: string): WhiteboardElement {
+  if (element.type !== "text") return { ...element, text };
+  const { width, height } = getNormalizedBounds({ ...element, text, width: 0, height: 0 });
+  return { ...element, text, width, height };
+}
 
 export function Canvas({ collaboration }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +48,11 @@ export function Canvas({ collaboration }: CanvasProps) {
   const setElements = useBoardStore((state) => state.setElements);
   const commitElements = useBoardStore((state) => state.commitElements);
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (editingElementId) textareaRef.current?.focus({ preventScroll: true });
+  }, [editingElementId]);
+
   const handleTextBlur = (text: string) => {
     setEditingElementId(null);
     if (!editingElement) return;
@@ -58,16 +69,9 @@ export function Canvas({ collaboration }: CanvasProps) {
       return;
     }
 
-    const nextElements = currentElements.map((el) => {
-      if (el.id === editingElementId) {
-        return {
-          ...el,
-          text,
-          width: el.type === "text" ? Math.max(text.length * 14, 100) : el.width
-        };
-      }
-      return el;
-    });
+    const nextElements = currentElements.map((el) =>
+      el.id === editingElementId ? updateElementText(el, text) : el
+    );
 
     setElements(nextElements);
     commitElements(nextElements);
@@ -202,6 +206,30 @@ export function Canvas({ collaboration }: CanvasProps) {
     return () => window.removeEventListener("paste", handlePaste);
   }, [collaboration, commitElements, viewport]);
 
+  let editorStyle: React.CSSProperties | undefined;
+  if (editingElement) {
+    const bounds = getNormalizedBounds(editingElement);
+    const isText = editingElement.type === "text";
+    const isSticky = editingElement.type === "sticky";
+    const centered = !isText && !isSticky;
+    const fontSize = (editingElement.fontSize || (isSticky ? 18 : isText ? 24 : 16)) * viewport.zoom;
+    const lineHeight = fontSize * (isText ? 1.2 : 1.3);
+    const lineCount = (editingElement.text || "").split("\n").length;
+    const inset = (isSticky ? 16 : centered ? 8 : 0) * viewport.zoom;
+    const height = isSticky ? Math.max(lineHeight, bounds.height * viewport.zoom - inset * 2) : lineCount * lineHeight;
+    editorStyle = {
+      left: bounds.x * viewport.zoom + viewport.x + inset,
+      top: bounds.y * viewport.zoom + viewport.y + (centered ? (bounds.height * viewport.zoom - height) / 2 : inset),
+      width: Math.max(12, bounds.width * viewport.zoom - inset * 2 + (isText ? fontSize : 0)),
+      height: Math.max(12, height),
+      fontFamily: BOARD_TEXT_FONT,
+      fontSize,
+      lineHeight: `${lineHeight}px`,
+      textAlign: centered ? "center" : "left",
+      color: isSticky ? "#1e293b" : getContrastStrokeColor(editingElement.strokeColor, theme)
+    };
+  }
+
   return (
     <section
       className="canvas-shell"
@@ -230,105 +258,30 @@ export function Canvas({ collaboration }: CanvasProps) {
 
       {editingElement && (
         <textarea
-          ref={(el) => {
-            if (el) {
-              setTimeout(() => el.focus(), 10);
-            }
-          }}
-          onBlur={(e) => handleTextBlur(e.target.value)}
-          onChange={(e) => {
-            const val = e.target.value;
-            e.target.style.height = "auto";
-            e.target.style.height = Math.max(editingElement.type === "sticky" ? 160 : 30, e.target.scrollHeight) + "px";
-            if (editingElement.type !== "sticky") {
-              e.target.style.width = "auto";
-              e.target.style.width = Math.max(e.target.scrollWidth, 60) + "px";
-            }
-            // Auto-expand element height for multiline text or sticky note
-            const lines = val.split("\n");
-            const fontSize = editingElement.fontSize || (editingElement.type === "sticky" ? 18 : 20);
-            const neededHeight = Math.max(
-              editingElement.type === "sticky" ? 200 : fontSize * 1.5,
-              lines.length * fontSize * 1.4 + 40
-            );
-
-            // Sync locally and emit element update in real-time
-            const currentElements = useBoardStore.getState().elements;
-            const nextElements = currentElements.map((el) =>
-              el.id === editingElement.id ? { ...el, text: val, height: neededHeight } : el
+          key={editingElement.id}
+          ref={textareaRef}
+          className="canvas-text-editor"
+          aria-label="Edit canvas text"
+          wrap={editingElement.type === "text" ? "off" : "soft"}
+          onBlur={(event) => handleTextBlur(event.currentTarget.value)}
+          onChange={(event) => {
+            const text = event.currentTarget.value;
+            const nextElements = useBoardStore.getState().elements.map((el) =>
+              el.id === editingElement.id ? updateElementText(el, text) : el
             );
             setElements(nextElements);
-            const targetEl = nextElements.find((el) => el.id === editingElement.id);
-            if (targetEl) {
-              collaboration.emitElementUpdate(targetEl);
-            }
+            const target = nextElements.find((el) => el.id === editingElement.id);
+            if (target) collaboration.emitElementUpdate(target);
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Escape") {
-              handleTextBlur(e.currentTarget.value);
-            }
-            // Commit on Cmd+Enter / Ctrl+Enter; regular Enter adds newline
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
               e.preventDefault();
-              handleTextBlur(e.currentTarget.value);
+              e.currentTarget.blur();
             }
           }}
           defaultValue={editingElement.text}
-          style={{
-            position: "absolute",
-            top:
-              editingElement.type === "sticky"
-                ? editingElement.y * viewport.zoom + viewport.y + 16 * viewport.zoom
-                : editingElement.type === "rectangle" || editingElement.type === "circle"
-                ? (editingElement.y + (editingElement.height || 60) / 2) * viewport.zoom + viewport.y - 14 * viewport.zoom
-                : editingElement.y * viewport.zoom + viewport.y,
-            left:
-              editingElement.type === "sticky"
-                ? editingElement.x * viewport.zoom + viewport.x + 16 * viewport.zoom
-                : editingElement.type === "rectangle" || editingElement.type === "circle"
-                ? editingElement.x * viewport.zoom + viewport.x + 8 * viewport.zoom
-                : editingElement.x * viewport.zoom + viewport.x,
-            width:
-              editingElement.type === "sticky"
-                ? (editingElement.width - 32) * viewport.zoom + "px"
-                : editingElement.type === "rectangle" || editingElement.type === "circle"
-                ? (editingElement.width - 16) * viewport.zoom + "px"
-                : "auto",
-            height:
-              editingElement.type === "sticky"
-                ? (editingElement.height - 32) * viewport.zoom + "px"
-                : editingElement.type === "rectangle" || editingElement.type === "circle"
-                ? "28px"
-                : "auto",
-            textAlign: editingElement.type === "rectangle" || editingElement.type === "circle" ? "center" : "left",
-            font: `${(editingElement.fontSize || (editingElement.type === "sticky" ? 18 : 20)) * viewport.zoom}px "Inter", "Segoe UI", sans-serif`,
-            color: editingElement.type === "sticky" ? "#1e293b" : getContrastStrokeColor(editingElement.strokeColor, theme),
-            background:
-              editingElement.type === "sticky"
-                ? "transparent"
-                : theme === "light"
-                ? "rgba(255, 255, 255, 0.95)"
-                : "rgba(15, 23, 42, 0.75)",
-            border:
-              editingElement.type === "sticky"
-                ? "none"
-                : "1px dashed rgba(245, 158, 11, 0.8)",
-            boxShadow:
-              editingElement.type === "sticky"
-                ? "none"
-                : theme === "light"
-                ? "0 2px 10px rgba(0, 0, 0, 0.12)"
-                : "0 4px 12px rgba(0, 0, 0, 0.5)",
-            borderRadius: "4px",
-            outline: "none",
-            resize: "none",
-            margin: 0,
-            padding: "2px",
-            overflow: "hidden",
-            whiteSpace: "pre-wrap",
-            zIndex: 50
-          }}
+          style={editorStyle}
         />
       )}
     </section>

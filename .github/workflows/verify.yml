@@ -71,6 +71,7 @@ jobs:
           node tests/workspace.e2e.mjs
           node tests/workspace-responsive.e2e.mjs
           node tests/ai-image.e2e.mjs
+          node tests/canvas-editing.e2e.mjs
           BASE_URL=http://127.0.0.1:3001 node tests/multi-editor.e2e.mjs
           node tests/responsive.check.mjs
       - name: Show application logs

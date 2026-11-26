@@ -210,7 +210,8 @@ export function useCanvas({
   useEffect(() => {
     const unsubscribe = useBoardStore.subscribe((state, previous) => {
       if (state.elements !== previous.elements || state.viewport !== previous.viewport ||
-          state.selectedElementIds !== previous.selectedElementIds || state.tool !== previous.tool ||
+          state.selectedElementIds !== previous.selectedElementIds || state.editingElementId !== previous.editingElementId ||
+          state.tool !== previous.tool ||
           state.theme !== previous.theme || state.laserPoints !== previous.laserPoints) {
         scheduleRender();
       }
@@ -232,7 +233,7 @@ export function useCanvas({
       return;
     }
 
-    const { elements: currentElements, viewport: currentViewport, tool, theme, selectedElementId, selectedElementIds } =
+    const { elements: currentElements, viewport: currentViewport, tool, theme, selectedElementId, selectedElementIds, editingElementId } =
       useBoardStore.getState();
     const ratio = devicePixelRatioRef.current;
 
@@ -253,15 +254,16 @@ export function useCanvas({
       drawElement(
         context,
         element,
-        isSingleSelection && element.id === selectedElementId,
+        isSingleSelection && element.id === selectedElementId && element.id !== editingElementId,
         tool === "select" && interactionRef.current.mode !== "drawing",
-        theme
+        theme,
+        { hideText: element.id === editingElementId, zoom: currentViewport.zoom }
       )
     );
 
     if (isMultiSelection && tool === "select" && interactionRef.current.mode !== "drawing") {
       const selectedEls = currentElements.filter((el) => selectedElementIds.includes(el.id));
-      drawMultiSelectionBox(context, selectedEls);
+      drawMultiSelectionBox(context, selectedEls, currentViewport.zoom, theme);
     }
 
     if (interactionRef.current.mode === "box-selecting") {
@@ -372,7 +374,7 @@ export function useCanvas({
         const selectedEls = currentElements.filter((el) => selectedElementIds.includes(el.id));
         const groupBounds = getCombinedBounds(selectedEls);
         if (groupBounds) {
-          const groupHandle = getBoundingBoxResizeHandleAtPoint(point, groupBounds);
+          const groupHandle = getBoundingBoxResizeHandleAtPoint(point, groupBounds, currentViewport.zoom);
           if (groupHandle) {
             useBoardStore.getState().setActiveElementIds(selectedElementIds);
             interactionRef.current = {
@@ -393,7 +395,7 @@ export function useCanvas({
       if (selectedElementIds.length === 1) {
         const currentlySelected = currentElements.find((el) => el.id === selectedElementIds[0]);
         if (currentlySelected) {
-          const handle = getResizeHandleAtPoint(point, currentlySelected);
+          const handle = getResizeHandleAtPoint(point, currentlySelected, currentViewport.zoom);
           if (handle) {
             useBoardStore.getState().setActiveElementIds([currentlySelected.id]);
             interactionRef.current = {
@@ -425,6 +427,7 @@ export function useCanvas({
             activeElement.type === "rectangle" ||
             activeElement.type === "circle")
         ) {
+          event.preventDefault();
           useBoardStore.getState().setEditingElementId(activeElement.id);
           selectElement(activeElement.id);
           return;
