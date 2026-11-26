@@ -42,22 +42,35 @@ jobs:
       - name: Run HTTP, WebSocket and browser checks
         run: |
           export BOARD_SECRET="$(openssl rand -hex 32)"
-          (cd server && exec env NODE_ENV=test HOST=127.0.0.1 node dist/index.js) > /tmp/canvasflow-api.log 2>&1 &
-          api_pid=$!
+          start_api() {
+            (cd server && exec env NODE_ENV=test HOST=127.0.0.1 node dist/index.js) >> /tmp/canvasflow-api.log 2>&1 &
+            api_pid=$!
+          }
+          wait_for_http() {
+            curl --fail --silent --show-error --connect-timeout 2 --retry 20 --retry-all-errors --retry-delay 1 "$1" > /dev/null
+          }
+          start_api
           (cd client && exec node ../node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000) > /tmp/canvasflow-web.log 2>&1 &
           web_pid=$!
           (cd client && exec node ../node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3001) > /tmp/canvasflow-dev.log 2>&1 &
           dev_pid=$!
           trap 'kill "$api_pid" "$web_pid" "$dev_pid" 2>/dev/null || true' EXIT
           for url in http://127.0.0.1:4001/health/ready http://127.0.0.1:3000 http://127.0.0.1:3001; do
-            curl --fail --silent --show-error --connect-timeout 2 --retry 20 --retry-all-errors --retry-delay 1 "$url" > /dev/null
+            wait_for_http "$url"
           done
           node tests/share-auth.e2e.mjs
           node tests/server.collab.e2e.mjs
           node tests/live-stroke.e2e.mjs
           node tests/live-reconnect.e2e.mjs
+          # The browser group needs a fresh per-IP board-creation allowance.
+          kill "$api_pid"
+          wait "$api_pid" || true
+          start_api
+          wait_for_http http://127.0.0.1:4001/health/ready
           BASE_URL=http://localhost:3000 API_URL=http://localhost:4001 node tests/board-opening.e2e.mjs
           node tests/workspace.e2e.mjs
+          node tests/workspace-responsive.e2e.mjs
+          node tests/ai-image.e2e.mjs
           BASE_URL=http://127.0.0.1:3001 node tests/multi-editor.e2e.mjs
           node tests/responsive.check.mjs
       - name: Show application logs

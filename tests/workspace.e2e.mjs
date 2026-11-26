@@ -65,13 +65,14 @@ try {
 
   const viewerContext = await browser.newContext({ viewport: { width: 390, height: 800 } });
   const viewer = await openWorkspace(viewerContext);
-  await viewer.getByRole("button", { name: "Open board link" }).click();
-  const invite = viewer.getByRole("dialog");
+  const invite = viewer.getByRole("region", { name: "Open a board link" });
   const inviteInput = invite.getByRole("textbox", { name: "Canvas Flow link" });
   await inviteInput.fill("https://unconfigured.invalid/board/elsewhere");
   await invite.getByRole("button", { name: "Open board" }).click();
   await invite.getByRole("alert").waitFor();
-  await inviteInput.fill(viewerLink);
+  const pastedLink = new URL(viewerLink);
+  if (pastedLink.hostname === "localhost") pastedLink.hostname = "127.0.0.1";
+  await inviteInput.fill(pastedLink.href);
   await invite.getByRole("button", { name: "Open board" }).click();
   await viewer.locator(".board-canvas").waitFor();
   assert.equal(new URL(viewer.url()).searchParams.has("share"), false);

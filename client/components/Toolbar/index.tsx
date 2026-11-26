@@ -398,7 +398,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       />
 
       <nav className="top-toolbar" aria-label="Drawing tools and controls">
-        {/* Desktop View (> 1024px) */}
+        {/* Desktop View */}
         <div className="toolbar-desktop-view">
           <button
             className={`tool-button ${isLocked ? "active" : ""}`}
@@ -544,7 +544,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           </button>
         </div>
 
-        {/* Mobile & Tablet View (<= 1024px) */}
+        {/* Compact View */}
         <div className="toolbar-mobile-view">
           {PRIMARY_TOOLS.map((option) => (
             <button

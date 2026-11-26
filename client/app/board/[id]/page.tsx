@@ -418,7 +418,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         position: "fixed",
         inset: 0,
         width: "100vw",
-        height: "100vh",
+        height: "100dvh",
         overflow: "hidden",
         background: "#0c0d14",
         margin: 0,
@@ -478,83 +478,26 @@ export default function BoardPage({ params }: BoardPageProps) {
         </button>
       </div>
 
-      {/* Read-Only Banner */}
       {isViewer && (
-        <div
-          className="readonly-banner"
-          style={{
-            position: "fixed",
-            top: "14px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "rgba(18, 19, 31, 0.95)",
-            backdropFilter: "blur(14px)",
-            border: "1px solid rgba(255, 255, 255, 0.12)",
-            padding: "6px 16px",
-            borderRadius: "9999px",
-            color: "#94a3b8",
-            fontSize: "12px",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            zIndex: 100,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)"
-          }}
-        >
-          <span
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: isUnauthenticated ? "#f59e0b" : "#10b981"
-            }}
-          />
-          <span>
-            {isUnauthenticated
-              ? "Ask the board owner for a valid invite link."
-              : "You have view-only access to this board."}
-          </span>
+        <div className="readonly-banner" data-locked={isUnauthenticated}>
+          <span className="readonly-dot" aria-hidden="true" />
+          <span>{isUnauthenticated
+            ? "Ask the board owner for a valid invite link."
+            : "You have view-only access to this board."}</span>
           {isUnauthenticated && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleApplyLink(pastedLinkInput);
-              }}
-              style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginLeft: "4px" }}
-            >
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              handleApplyLink(pastedLinkInput);
+            }}>
               <input
                 type="text"
-                placeholder="Have a link?"
+                inputMode="url"
+                placeholder="Paste invite"
                 value={pastedLinkInput}
-                onChange={(e) => setPastedLinkInput(e.target.value)}
-                aria-label="Have a link?"
-                style={{
-                  background: "rgba(255, 255, 255, 0.08)",
-                  border: "1px solid rgba(255, 255, 255, 0.15)",
-                  borderRadius: "6px",
-                  color: "#fff",
-                  fontSize: "11px",
-                  padding: "2px 8px",
-                  width: "110px",
-                  outline: "none"
-                }}
+                onChange={(event) => setPastedLinkInput(event.target.value)}
+                aria-label="Board invite link"
               />
-              <button
-                type="submit"
-                style={{
-                  background: "#6366f1",
-                  border: "none",
-                  borderRadius: "6px",
-                  color: "#fff",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  padding: "2px 8px",
-                  cursor: "pointer"
-                }}
-              >
-                Unlock
-              </button>
+              <button type="submit">Unlock</button>
             </form>
           )}
         </div>
@@ -605,18 +548,18 @@ export default function BoardPage({ params }: BoardPageProps) {
           const effectivePresenceUsers = selfUser ? [selfUser, ...otherUsers] : allUsers;
 
           return (
-            <div
-              style={{ display: "flex", alignItems: "center", cursor: "pointer", gap: "6px" }}
+            <button type="button" className="presence-trigger" aria-label="Active collaborators"
               onClick={() => setIsActiveUsersOpen(!isActiveUsersOpen)}
-              title="Click to see active collaborators"
+              title="See active collaborators"
             >
-              <div style={{ display: "flex", alignItems: "center" }}>
+              <div className="presence-avatars">
                 {effectivePresenceUsers.slice(0, 5).map((user, idx) => {
                   const initials = user.name
                     ? user.name.split(/\s+/).map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
                     : "U";
                   return (
                     <div
+                      className="presence-avatar"
                       key={user.userId || idx}
                       title={user.name}
                       style={{
@@ -645,6 +588,7 @@ export default function BoardPage({ params }: BoardPageProps) {
                 })}
                 {effectivePresenceUsers.length > 5 && (
                   <div
+                    className="presence-overflow"
                     style={{
                       width: "28px",
                       height: "28px",
@@ -680,10 +624,10 @@ export default function BoardPage({ params }: BoardPageProps) {
                   }}
                 />
                 <span className="presence-count-text">
-                  {effectivePresenceUsers.length} {effectivePresenceUsers.length === 1 ? "online" : "collaborating"}
+                  {effectivePresenceUsers.length}<span className="presence-count-suffix"> online</span>
                 </span>
               </div>
-            </div>
+            </button>
           );
         })()}
 

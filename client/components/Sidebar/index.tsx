@@ -57,10 +57,6 @@ export function Sidebar({ boardId, boardTitle, mobileTitleEditor, saveStatus, is
     if (isOpen) setRecentBoards(readRecentBoards());
   }, [isOpen]);
 
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
-
   // Close menu on click/touch outside on the board
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
@@ -204,17 +200,8 @@ export function Sidebar({ boardId, boardTitle, mobileTitleEditor, saveStatus, is
           aria-modal={isOpen}
           style={{ zIndex: 1000 }}
         >
-          <div
-            style={{
-              padding: "10px 14px",
-              borderBottom: "1px solid var(--panel-border)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: "6px"
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div className="sidebar-heading">
+            <div className="sidebar-heading-info">
               <CanvasFlowLogo size={24} />
               <div>
                 <div className="sidebar-board-title">{boardTitle || "Canvas Flow"}</div>
@@ -223,7 +210,7 @@ export function Sidebar({ boardId, boardTitle, mobileTitleEditor, saveStatus, is
               </div>
             </div>
             {saveStatus && (
-              <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: "var(--muted)" }}>
+              <div className="sidebar-save-status">
                 {saveStatus === "saving" && <Loader2 size={12} className="animate-spin" color="#60a5fa" />}
                 {saveStatus === "saved" && <CheckCircle2 size={12} color="#10b981" />}
                 {saveStatus === "conflict" && <Loader2 size={12} color="#f59e0b" />}

@@ -16,7 +16,7 @@ import {
   Layers,
   ArrowRight
 } from "lucide-react";
-import { generateAiImage, getAiCapabilities, type AiCapabilities, type GenerateAiImageResult } from "@/lib/api";
+import { generateAiImage, getAiCapabilities, type AiAvailability, type AiCapabilities, type GenerateAiImageResult } from "@/lib/api";
 import { useBoardStore } from "@/store/boardStore";
 
 type AiImageModalProps = {
@@ -81,6 +81,14 @@ const EXAMPLE_PROMPTS = [
   "Minimalist modern tech logo for cloud platform"
 ];
 
+const availabilityMessage: Record<NonNullable<AiAvailability>, string> = {
+  not_configured: "Image generation needs a provider key on this server.",
+  credit: "The configured image providers are out of generation credit. Contact the site owner.",
+  key: "The image provider rejected this server’s key. Contact the site owner.",
+  permission: "This server’s key needs permission to generate images.",
+  unreachable: "Could not reach the image service. Close and reopen the studio to retry."
+};
+
 export function AiImageModal({
   isOpen,
   onClose,
@@ -96,15 +104,9 @@ export function AiImageModal({
   const [error, setError] = useState<string | null>(null);
   const [activeSketch, setActiveSketch] = useState<string | undefined>(undefined);
   const [clusterNotice, setClusterNotice] = useState(false);
-  const [capabilities, setCapabilities] = useState<AiCapabilities>({
-    sketch: false,
-    sketchModel: null
-  });
+  const [capabilities, setCapabilities] = useState<AiCapabilities | null>(null);
   const [generatedResult, setGeneratedResult] = useState<GenerateAiImageResult | null>(null);
-  const [naturalDimensions, setNaturalDimensions] = useState<{ width: number; height: number }>({
-    width: 768,
-    height: 768
-  });
+  const [naturalDimensions, setNaturalDimensions] = useState<{ width: number; height: number } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const prevIsOpenRef = useRef(false);
@@ -119,6 +121,8 @@ export function AiImageModal({
       setProgress(0);
       setIsGenerating(false);
       setGeneratedResult(null);
+      setNaturalDimensions(null);
+      setCapabilities(null);
       setActiveSketch(sketchBase64 || undefined);
       setClusterNotice(Boolean(isClusterUsed));
 
@@ -126,7 +130,9 @@ export function AiImageModal({
         setCapabilities(caps);
       });
 
-      setTimeout(() => inputRef.current?.focus(), 60);
+      if (window.matchMedia("(pointer: fine) and (min-width: 700px)").matches) {
+        setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 60);
+      }
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, initialPrompt, sketchBase64, isClusterUsed]);
@@ -144,28 +150,11 @@ export function AiImageModal({
   if (!isOpen) return null;
 
   const hasSketch = Boolean(activeSketch);
-  const isSketchBackendAvailable = Boolean(capabilities.sketch);
-  // Say why the drawing is not used: "not set up" is wrong (and useless to the site owner) when the
-  // image account simply ran out of credit or its key was rejected.
-  const sketchOffNote =
-    capabilities.reason === "credit"
-      ? "Sketch-guided generation is paused: the image account of this site is out of credit."
-      : capabilities.reason === "key"
-        ? "Sketch-guided generation is paused: the image service rejected this site's key."
-        : "Sketch-guided generation is not set up on this server.";
-
-  // Label calculations (3.7)
-  let badgeLabel = "No sketch - text only";
-  let buttonLabel = "Generate from text";
-  if (hasSketch) {
-    if (isSketchBackendAvailable) {
-      badgeLabel = "Sketch-guided";
-      buttonLabel = "Generate from sketch";
-    } else {
-      badgeLabel = "Text only";
-      buttonLabel = "Generate from text";
-    }
-  }
+  const useSketch = hasSketch && Boolean(capabilities?.sketch);
+  const canGenerate = useSketch || Boolean(capabilities?.text);
+  const canSubmit = canGenerate && !isGenerating && Boolean(prompt.trim());
+  const badgeLabel = useSketch ? "Sketch-guided" : "Text to image";
+  const buttonLabel = useSketch ? "Generate from sketch" : "Generate from text";
 
   const handleGenerate = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -174,19 +163,21 @@ export function AiImageModal({
       setError("Please describe what image you want to create.");
       return;
     }
+    if (!canSubmit) return;
 
     setIsGenerating(true);
     setProgress(15);
     setError(null);
     setGeneratedResult(null);
+    setNaturalDimensions(null);
 
     try {
       const res = await generateAiImage(
         {
-          imageBase64: activeSketch,
+          imageBase64: useSketch ? activeSketch : undefined,
           prompt: cleanPrompt,
           styleId: selectedStyle.id,
-          allowTextOnly: !hasSketch || !isSketchBackendAvailable
+          allowTextOnly: !useSketch
         },
         (p) => setProgress(Math.max(15, p))
       );
@@ -194,47 +185,26 @@ export function AiImageModal({
       setProgress(100);
       setGeneratedResult(res);
     } catch (err: any) {
-      if (err?.code === "SKETCH_UNAVAILABLE") {
-        try {
-          const caps = await getAiCapabilities();
-          setCapabilities(caps);
-        } catch {
-          // ignore
-        }
-        setError(err?.message || "Image service unavailable, try again.");
-      } else {
-        setError(err?.message || "Image service unavailable, try again.");
+      if (["SKETCH_UNAVAILABLE", "AI_NOT_CONFIGURED", "IMAGE_CREDIT", "IMAGE_ACCESS"].includes(err?.code)) {
+        setCapabilities(await getAiCapabilities());
       }
+      setError(err?.message || "Image service unavailable. Try again.");
     } finally {
       setIsGenerating(false);
     }
   };
 
   const handleInsert = () => {
-    if (generatedResult?.imageUrl) {
-      onGenerate(
-        generatedResult.imageUrl,
-        naturalDimensions.width || 400,
-        naturalDimensions.height || 400
-      );
+    if (generatedResult?.imageUrl && naturalDimensions) {
+      onGenerate(generatedResult.imageUrl, naturalDimensions.width, naturalDimensions.height);
       onClose();
     }
   };
 
-  // Result caption calculation (3.7)
-  let resultCaption = "";
-  if (generatedResult) {
-    const modelName = generatedResult.model || "flux";
-    if (generatedResult.sketchIgnored === "blank") {
-      resultCaption = "Your sketch looked empty, so it was not used.";
-    } else if (generatedResult.sketchGuided) {
-      resultCaption = `AI - ${modelName} - guided by your sketch`;
-    } else if (hasSketch) {
-      resultCaption = `AI - ${modelName} - text only, your sketch was not used`;
-    } else {
-      resultCaption = `AI - ${modelName} - text only`;
-    }
-  }
+  const resultCaption = generatedResult ? [
+    generatedResult.provider,
+    generatedResult.sketchGuided ? "Sketch-guided" : "Generated from text"
+  ].filter(Boolean).join(" · ") : "";
 
   return (
     <div
@@ -262,7 +232,7 @@ export function AiImageModal({
           maxWidth: "600px",
           maxHeight: "90vh",
           overflowY: "auto",
-          padding: "28px",
+          padding: "clamp(14px, 4vw, 28px)",
           boxShadow: isLight
             ? "0 25px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
             : "0 30px 80px rgba(0, 0, 0, 0.8)",
@@ -273,7 +243,9 @@ export function AiImageModal({
           transition: "all 0.2s ease"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog ai-image-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label="AI Image Studio"
       >
         {/* Modal Header */}
@@ -294,7 +266,7 @@ export function AiImageModal({
               <Wand2 size={22} />
             </div>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px 8px" }}>
                 <h3
                   style={{
                     margin: 0,
@@ -314,13 +286,13 @@ export function AiImageModal({
                     letterSpacing: "0.08em",
                     padding: "2px 8px",
                     borderRadius: "9999px",
-                    background: hasSketch && isSketchBackendAvailable
+                    background: useSketch
                       ? isLight ? "rgba(16, 185, 129, 0.12)" : "rgba(16, 185, 129, 0.25)"
                       : isLight ? "rgba(139, 92, 246, 0.12)" : "rgba(139, 92, 246, 0.25)",
-                    color: hasSketch && isSketchBackendAvailable
+                    color: useSketch
                       ? (isLight ? "#059669" : "#34d399")
                       : (isLight ? "#7c3aed" : "#c084fc"),
-                    border: hasSketch && isSketchBackendAvailable
+                    border: useSketch
                       ? "1px solid rgba(16, 185, 129, 0.3)"
                       : "1px solid rgba(139, 92, 246, 0.3)"
                   }}
@@ -386,6 +358,10 @@ export function AiImageModal({
                   objectFit: "contain",
                   display: "block"
                 }}
+                onError={() => {
+                  setGeneratedResult(null);
+                  setError("Could not load the generated image. Try again.");
+                }}
               />
             </div>
 
@@ -405,7 +381,7 @@ export function AiImageModal({
             </div>
 
             {/* Action buttons */}
-            <div style={{ display: "flex", width: "100%", gap: "10px", marginTop: "6px" }}>
+            <div className="ai-image-actions" style={{ display: "flex", width: "100%", gap: "10px", marginTop: "6px" }}>
               <button
                 type="button"
                 onClick={() => setGeneratedResult(null)}
@@ -426,6 +402,7 @@ export function AiImageModal({
               <button
                 type="button"
                 onClick={handleInsert}
+                disabled={!naturalDimensions}
                 style={{
                   flex: 2,
                   padding: "12px 20px",
@@ -479,9 +456,9 @@ export function AiImageModal({
                       border: "1px solid rgba(0,0,0,0.15)"
                     }}
                   />
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: "12px", fontWeight: 700, color: isLight ? "#1e293b" : "#f1f5f9" }}>
-                      {capabilities.sketch
+                      {useSketch
                         ? "This is what the AI will see"
                         : "Your drawing - not used, pictures are made from text only"}
                     </div>
@@ -502,14 +479,16 @@ export function AiImageModal({
                       fontSize: "12px",
                       color: isLight ? "#64748b" : "#94a3b8",
                       cursor: isGenerating ? "not-allowed" : "pointer",
-                      textDecoration: "underline"
+                      textDecoration: "underline",
+                      flexShrink: 0,
+                      minHeight: "44px"
                     }}
                   >
-                    Don't use my drawing
+                    Use text only
                   </button>
                 </div>
 
-                {!isSketchBackendAvailable && (
+                {capabilities && !useSketch && capabilities.text && (
                   <div
                     style={{
                       fontSize: "12px",
@@ -520,21 +499,14 @@ export function AiImageModal({
                       border: isLight ? "1px solid #fde68a" : "1px solid rgba(245, 158, 11, 0.25)"
                     }}
                   >
-                    {sketchOffNote} The picture will be made from your text only.
+                    Sketch generation is unavailable. You can generate from text.
                   </div>
                 )}
               </div>
-            ) : (
-              <div
-                style={{
-                  fontSize: "12px",
-                  color: isLight ? "#94a3b8" : "#71717a",
-                  fontStyle: "italic",
-                  padding: "4px 2px"
-                }}
-              >
-                No sketch - text only
-              </div>
+            ) : null}
+
+            {capabilities?.textReason && !useSketch && (
+              <p role="status" className="ai-image-notice">{availabilityMessage[capabilities.textReason]}</p>
             )}
 
             {/* Prompt Input */}
@@ -573,7 +545,7 @@ export function AiImageModal({
                   background: isLight ? "#f8fafc" : "rgba(255, 255, 255, 0.05)",
                   border: isLight ? "1.5px solid #cbd5e1" : "1.5px solid rgba(255, 255, 255, 0.14)",
                   color: isLight ? "#0f172a" : "#ffffff",
-                  fontSize: "14px",
+                  fontSize: "16px",
                   fontWeight: 500,
                   outline: "none",
                   boxSizing: "border-box",
@@ -648,7 +620,7 @@ export function AiImageModal({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 128px), 1fr))",
                   gap: "8px"
                 }}
               >
@@ -702,7 +674,7 @@ export function AiImageModal({
                       >
                         <IconComponent size={13} />
                       </div>
-                      <span style={{ whiteSpace: "nowrap" }}>{style.label}</span>
+                      <span>{style.label}</span>
                       {isSelected && <Check size={13} style={{ marginLeft: "auto", color: style.color }} />}
                     </button>
                   );
@@ -713,6 +685,7 @@ export function AiImageModal({
             {/* Error Notice */}
             {error && (
               <div
+                role="alert"
                 style={{
                   padding: "10px 14px",
                   borderRadius: "10px",
@@ -729,7 +702,7 @@ export function AiImageModal({
 
             {/* Generating Progress Indicator */}
             {isGenerating && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div role="status" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                 <div
                   style={{
                     display: "flex",
@@ -767,18 +740,18 @@ export function AiImageModal({
             {/* Submit Button (3.7) */}
             <button
               type="submit"
-              disabled={isGenerating || !prompt.trim()}
+              disabled={!canSubmit}
               style={{
                 padding: "14px 24px",
                 borderRadius: "14px",
                 background:
-                  isGenerating || !prompt.trim()
+                  !canSubmit
                     ? isLight
                       ? "#e2e8f0"
                       : "rgba(255, 255, 255, 0.08)"
                     : "#6366f1",
                 color:
-                  isGenerating || !prompt.trim()
+                  !canSubmit
                     ? isLight
                       ? "#94a3b8"
                       : "#64748b"
@@ -786,8 +759,8 @@ export function AiImageModal({
                 border: "none",
                 fontWeight: 700,
                 fontSize: "15px",
-                cursor: isGenerating || !prompt.trim() ? "not-allowed" : "pointer",
-                boxShadow: isGenerating || !prompt.trim() ? "none" : "0 4px 14px rgba(99, 102, 241, 0.4)",
+                cursor: !canSubmit ? "not-allowed" : "pointer",
+                boxShadow: !canSubmit ? "none" : "0 4px 14px rgba(99, 102, 241, 0.4)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -803,7 +776,7 @@ export function AiImageModal({
               ) : (
                 <>
                   <Sparkles size={18} />
-                  <span>{buttonLabel}</span>
+                  <span>{capabilities ? buttonLabel : "Checking image service…"}</span>
                   <ArrowRight size={16} />
                 </>
               )}

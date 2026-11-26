@@ -98,11 +98,12 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
           borderRadius: "16px",
           width: "100%",
           maxWidth: "480px",
-          padding: "24px",
+          padding: "clamp(14px, 4vw, 24px)",
           boxShadow: isLight ? "0 20px 50px rgba(0, 0, 0, 0.12)" : "0 20px 50px rgba(0, 0, 0, 0.6)",
           color: isLight ? "#0f172a" : "#f3f4f6"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog"
         role="dialog"
         aria-label="Share Board"
         aria-modal="true"

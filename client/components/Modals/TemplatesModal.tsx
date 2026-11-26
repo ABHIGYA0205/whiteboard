@@ -69,11 +69,12 @@ export function TemplatesModal({ isOpen, onClose, collaboration }: TemplatesModa
           maxWidth: "680px",
           maxHeight: "85vh",
           overflowY: "auto",
-          padding: "24px",
+          padding: "clamp(14px, 4vw, 24px)",
           boxShadow: isLight ? "0 20px 50px rgba(0, 0, 0, 0.12)" : "0 20px 50px rgba(0, 0, 0, 0.6)",
           color: isLight ? "#0f172a" : "#f3f4f6"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog"
         role="dialog"
         aria-label="Templates Gallery"
         aria-modal="true"
@@ -108,7 +109,7 @@ export function TemplatesModal({ isOpen, onClose, collaboration }: TemplatesModa
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "16px" }}>
           {BOARD_TEMPLATES.map((tmpl) => (
             <div
               key={tmpl.id}

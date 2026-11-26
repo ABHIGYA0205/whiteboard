@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "crypto";
+import { InferenceClient, InferenceClientHubApiError, InferenceClientProviderApiError } from "@huggingface/inference";
 import { PNG } from "pngjs";
 import { env } from "../utils/env";
 import { saveBase64Image } from "../utils/storage";
@@ -180,15 +181,54 @@ export function checkRateLimit(ip: string): boolean {
 export function resetRateLimitsForTesting(): void {
   ipRateLimit.clear();
   jobs.clear();
-  sketchDownUntil = 0;
-  sketchDownReason = null;
+  providerPauses.clear();
+  sketchPermissionUntil = 0;
 }
 
 const GEN_BASE = process.env.POLLINATIONS_GEN_BASE || "https://gen.pollinations.ai";
-const LEGACY_BASE = process.env.POLLINATIONS_LEGACY_BASE || "https://image.pollinations.ai";
-let sketchDownUntil = 0;
-/** Why the image service refused the last sketch request: no credit left (402) or a rejected key (401). */
-let sketchDownReason: "credit" | "key" | null = null;
+const HF_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell";
+type Provider = "Pollinations" | "Hugging Face";
+type ImageAvailability = "not_configured" | "credit" | "key" | "permission" | null;
+type ProviderFailure = { provider: Provider; status?: number; retryAfter?: number };
+const providerPauses = new Map<Provider, { status: number; until: number }>();
+let sketchPermissionUntil = 0;
+
+function pollinationsKey() {
+  const key = env.pollinationsApiKey;
+  return key.startsWith("pk_") ? "" : key;
+}
+
+function providerStatus(provider: Provider) {
+  const pause = providerPauses.get(provider);
+  return pause && pause.until > Date.now() ? pause.status : undefined;
+}
+
+function rememberProviderFailure(failure: ProviderFailure) {
+  if (failure.status === 401 || failure.status === 402) {
+    providerPauses.set(failure.provider, { status: failure.status, until: Date.now() + 60_000 });
+  }
+}
+
+function availability(failures: ProviderFailure[]): ImageAvailability {
+  if (failures.some(({ status }) => status === 402)) return "credit";
+  if (failures.some(({ status }) => status === 401)) return "key";
+  if (failures.some(({ status }) => status === 403)) return "permission";
+  return "not_configured";
+}
+
+function unavailableTextProviders(): ProviderFailure[] {
+  const configured: Provider[] = [];
+  if (pollinationsKey()) configured.push("Pollinations");
+  if (env.hfToken) configured.push("Hugging Face");
+  const failures = configured.map((provider) => ({ provider, status: providerStatus(provider) }));
+  return failures.every(({ status }) => status) ? failures : [];
+}
+
+function textUnavailableReason(): ImageAvailability {
+  if (!pollinationsKey() && !env.hfToken) return "not_configured";
+  const failures = unavailableTextProviders();
+  return failures.length ? availability(failures) : null;
+}
 
 /** The measured wording in use: SKETCH_WORDING if it names a listed wording, else the measured default. */
 export function activeSketchWording(): SketchWording | null {
@@ -206,13 +246,14 @@ export function sketchEditPrompt(subject: string): string {
 }
 
 export function sketchBackendAvailable(): boolean {
-  return Boolean(env.pollinationsApiKey) && activeSketchWording() !== null && Date.now() >= sketchDownUntil;
+  return sketchUnavailableReason() === null;
 }
 
-/** Why sketch-guided generation is off right now, or null when it is on. */
-export function sketchUnavailableReason(): "not_configured" | "credit" | "key" | null {
-  if (!env.pollinationsApiKey || activeSketchWording() === null) return "not_configured";
-  if (Date.now() < sketchDownUntil) return sketchDownReason ?? "credit";
+export function sketchUnavailableReason(): ImageAvailability {
+  if (!pollinationsKey() || activeSketchWording() === null) return "not_configured";
+  const status = providerStatus("Pollinations");
+  if (status) return status === 402 ? "credit" : "key";
+  if (Date.now() < sketchPermissionUntil) return "permission";
   return null;
 }
 
@@ -250,16 +291,18 @@ export async function executeSketchGeneration(
     form.append("seed", String(seed));
     form.append("n", "1");
     form.append("response_format", "b64_json");
+    const signal = AbortSignal.timeout(135_000);
     const response = await fetch(`${GEN_BASE}/v1/images/edits`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${env.pollinationsApiKey}` },
+      headers: { Authorization: `Bearer ${pollinationsKey()}` },
       body: form,
-      signal: AbortSignal.timeout(150000)
+      redirect: "error",
+      signal
     });
-    if (response.status === 401 || response.status === 402) {
-      sketchDownUntil = Date.now() + 10 * 60 * 1000;
-      sketchDownReason = response.status === 402 ? "credit" : "key";
-      fail("Sketch-guided generation is unavailable right now. You can still generate from your text.", "SKETCH_UNAVAILABLE");
+    if ([401, 402, 403].includes(response.status)) {
+      rememberProviderFailure({ provider: "Pollinations", status: response.status });
+      if (response.status === 403) sketchPermissionUntil = Date.now() + 60_000;
+      fail("Pollinations could not generate from your sketch.", "SKETCH_UNAVAILABLE");
       return;
     }
     if (response.status === 429) {
@@ -275,7 +318,10 @@ export async function executeSketchGeneration(
     const item = json?.data?.[0] || {};
     let bytes: Buffer | null = null;
     if (typeof item.b64_json === "string") bytes = Buffer.from(item.b64_json, "base64");
-    else if (typeof item.url === "string") bytes = Buffer.from(await (await fetch(item.url)).arrayBuffer());
+    else if (typeof item.url === "string" && new URL(item.url).origin === "https://media.pollinations.ai") {
+      const media = await fetch(item.url, { signal, redirect: "error" });
+      if (media.ok) bytes = Buffer.from(await media.arrayBuffer());
+    }
     const mime = bytes ? imageMime(bytes) : null;
     if (!bytes || !mime) {
       fail("Image service unavailable, try again.");
@@ -294,128 +340,98 @@ export async function executeSketchGeneration(
   }
 }
 
-/**
- * Text backend execution (3.5):
- * - With a key: GET https://gen.pollinations.ai/image/{prompt} with Bearer key
- * - Without a key: GET https://image.pollinations.ai/prompt/{prompt}
- * - On 402/429: sets RATE_LIMITED error with retryAfter
- */
-export async function executeTextGeneration(
-  job: JobStatus,
-  prompt: string,
-  width: number,
-  height: number,
-  seed: number
-): Promise<void> {
+type GeneratedImage = { bytes: Buffer; mime: string; provider: Provider; model: string };
+
+function textFailure(failures: ProviderFailure[]) {
+  if (failures.some(({ status }) => status === 400 || status === 422)) {
+    return { error: "The image provider could not use that prompt. Try revising it.", code: "PROMPT_REJECTED" };
+  }
+  const busy = failures.find(({ status }) => status === 429);
+  if (busy) {
+    const retryAfter = busy.retryAfter || 30;
+    return { error: `The image service is busy. Try again in ${retryAfter} seconds.`, code: "RATE_LIMITED", retryAfter };
+  }
+  const reason = availability(failures);
+  if (reason === "credit") {
+    const names = failures.filter(({ status }) => status === 402).map(({ provider }) => provider).join(" and ");
+    return { error: `Image generation credit is exhausted on ${names}. Contact the site owner.`, code: "IMAGE_CREDIT" };
+  }
+  if (reason === "key" || reason === "permission") {
+    return { error: "The image provider did not authorize this server to generate images. Contact the site owner.", code: "IMAGE_ACCESS" };
+  }
+  return { error: "The image service is unavailable. Try again shortly.", code: "IMAGE_UNAVAILABLE" };
+}
+
+async function pollinationsText(prompt: string, width: number, height: number, seed: number): Promise<GeneratedImage | ProviderFailure> {
+  const provider = "Pollinations";
+  const model = process.env.POLLINATIONS_TEXT_MODEL || "flux";
+  const query = new URLSearchParams({ model, seed: String(seed), width: String(width), height: String(height) });
+  const response = await fetch(`${GEN_BASE}/image/${encodeURIComponent(prompt)}?${query}`, {
+    headers: { Authorization: `Bearer ${pollinationsKey()}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(70_000)
+  });
+  if (!response.ok) {
+    return { provider, status: response.status, retryAfter: Number(response.headers.get("retry-after")) || undefined };
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const mime = imageMime(bytes);
+  return mime ? { bytes, mime, provider, model: response.headers.get("x-model-used") || model } : { provider };
+}
+
+async function huggingFaceText(prompt: string, width: number, height: number, seed: number): Promise<GeneratedImage | ProviderFailure> {
+  const provider = "Hugging Face";
+  try {
+    const image = await new InferenceClient(env.hfToken).textToImage({
+      provider: "fal-ai",
+      model: HF_IMAGE_MODEL,
+      inputs: prompt,
+      parameters: { width, height, seed, num_inference_steps: 4 }
+    }, { signal: AbortSignal.timeout(55_000), retry_on_error: false });
+    const bytes = Buffer.from(await image.arrayBuffer());
+    const mime = imageMime(bytes);
+    return mime ? { bytes, mime, provider, model: HF_IMAGE_MODEL } : { provider };
+  } catch (error) {
+    const status = error instanceof InferenceClientProviderApiError || error instanceof InferenceClientHubApiError
+      ? error.httpResponse.status
+      : undefined;
+    return { provider, status };
+  }
+}
+
+export async function executeTextGeneration(job: JobStatus, prompt: string, width: number, height: number, seed: number) {
   job.status = "processing";
   job.progress = 30;
+  const failures: ProviderFailure[] = [];
+  let image: GeneratedImage | undefined;
+
+  if (pollinationsKey()) {
+    const status = providerStatus("Pollinations");
+    const result = status ? { provider: "Pollinations" as const, status }
+      : await pollinationsText(prompt, width, height, seed).catch(() => ({ provider: "Pollinations" as const, status: undefined }));
+    if ("bytes" in result) image = result;
+    else failures.push(result);
+  }
+  if (!image && env.hfToken && !failures.some(({ status }) => status === 400 || status === 422)) {
+    const status = providerStatus("Hugging Face");
+    const result = status ? { provider: "Hugging Face" as const, status } : await huggingFaceText(prompt, width, height, seed);
+    if ("bytes" in result) image = result;
+    else failures.push(result);
+  }
+  failures.forEach(rememberProviderFailure);
+
+  if (!image) {
+    const failure = textFailure(failures);
+    Object.assign(job, { status: "failed", progress: 0, error: failure.error, errorCode: failure.code, retryAfter: failure.retryAfter });
+    return;
+  }
 
   try {
-    const key = env.pollinationsApiKey;
-    let url: string;
-    let headers: Record<string, string> = {};
-    let targetModel = "flux";
-
-    let response: any = null;
-
-    if (key) {
-      targetModel = process.env.POLLINATIONS_TEXT_MODEL || "flux";
-      const query = new URLSearchParams({
-        model: targetModel,
-        seed: String(seed),
-        width: String(width),
-        height: String(height),
-        nologo: "true"
-      });
-      url = `${GEN_BASE}/image/${encodeURIComponent(prompt)}?${query.toString()}`;
-      headers = { Authorization: `Bearer ${key}` };
-
-      try {
-        const res = await fetch(url, {
-          headers,
-          signal: AbortSignal.timeout(120000)
-        });
-        if (res.ok) {
-          response = res;
-        } else if (res.status === 401 || res.status === 402) {
-          // If key is invalid or wallet is empty, fall back to anonymous endpoint
-          response = null;
-        } else {
-          response = res;
-        }
-      } catch {
-        response = null;
-      }
-    }
-
-    if (!response) {
-      targetModel = "sana";
-      const query = new URLSearchParams({
-        seed: String(seed),
-        width: String(width),
-        height: String(height),
-        nologo: "true"
-      });
-      url = `${LEGACY_BASE}/prompt/${encodeURIComponent(prompt)}?${query.toString()}`;
-      headers = { "User-Agent": "Mozilla/5.0 sketch-probe" };
-
-      response = await fetch(url, {
-        headers,
-        signal: AbortSignal.timeout(120000)
-      });
-    }
-
-    if (response.status === 402 || response.status === 429) {
-      const retryHeader = response.headers.get("retry-after");
-      const retryAfter = retryHeader ? Number(retryHeader) || 45 : 45;
-      job.status = "failed";
-      job.progress = 0;
-      job.errorCode = "RATE_LIMITED";
-      job.retryAfter = retryAfter;
-      job.error = `The free image service allows one picture every 45 seconds for everyone using this app. Try again in ${retryAfter} s.`;
-      return;
-    }
-
-    if (!response.ok) {
-      job.status = "failed";
-      job.progress = 0;
-      job.error = "Image service unavailable, try again.";
-      return;
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      job.status = "failed";
-      job.progress = 0;
-      job.error = "Image service unavailable, try again.";
-      return;
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length < 500) {
-      job.status = "failed";
-      job.progress = 0;
-      job.error = "Image service unavailable, try again.";
-      return;
-    }
-
     job.progress = 85;
-
-    const base64 = `data:${contentType};base64,${buffer.toString("base64")}`;
-    const savedUrl = await saveBase64Image(base64);
-
-    const usedModel = response.headers.get("x-model-used") || targetModel;
-
-    job.status = "completed";
-    job.progress = 100;
-    job.imageUrl = savedUrl;
-    job.provider = "Pollinations";
-    job.model = usedModel;
-    job.sketchGuided = false;
+    const imageUrl = await saveBase64Image(`data:${image.mime};base64,${image.bytes.toString("base64")}`);
+    Object.assign(job, { status: "completed", progress: 100, imageUrl, provider: image.provider, model: image.model });
   } catch {
-    job.status = "failed";
-    job.progress = 0;
-    job.error = "Image service unavailable, try again.";
+    Object.assign(job, { status: "failed", progress: 0, error: "Could not save the generated image. Try again shortly.", errorCode: "IMAGE_STORAGE" });
   }
 }
 
@@ -472,7 +488,18 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
     return;
   }
 
-  const seed = typeof incomingSeed === "number" ? incomingSeed : Math.floor(Math.random() * 1000000);
+  if (!useSketch && textUnavailableReason()) {
+    const failures = unavailableTextProviders();
+    const failure = failures.length ? textFailure(failures) : {
+      error: "Image generation needs a Pollinations or Hugging Face key on this server.",
+      code: "AI_NOT_CONFIGURED"
+    };
+    res.status(503).json(failure);
+    return;
+  }
+
+  const seed = typeof incomingSeed === "number" && Number.isInteger(incomingSeed)
+    ? incomingSeed : Math.floor(Math.random() * 1000000);
   const jobId = crypto.randomUUID();
   const job: JobStatus = {
     id: jobId,
@@ -500,12 +527,20 @@ export async function handleGenerateRequest(req: Request, res: Response): Promis
   res.status(202).json({ jobId, status: "pending", seed });
 }
 
+aiRouter.use((_req, response, next) => {
+  response.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 aiRouter.post("/generate", handleGenerateRequest);
 aiRouter.post("/enhance", handleGenerateRequest);
 
 aiRouter.get("/capabilities", (_req: Request, res: Response) => {
   const available = sketchBackendAvailable();
+  const textReason = textUnavailableReason();
   res.json({
+    text: !textReason,
+    textReason,
     sketch: available,
     sketchModel: available ? SKETCH_MODEL : null,
     reason: sketchUnavailableReason()

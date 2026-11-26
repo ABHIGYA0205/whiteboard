@@ -185,18 +185,21 @@ export interface GenerateAiImageResult {
   sketchIgnored?: string | null;
 }
 
+export type AiAvailability = "not_configured" | "credit" | "key" | "permission" | "unreachable" | null;
+
 export type AiCapabilities = {
+  text: boolean;
+  textReason: AiAvailability;
   sketch: boolean;
   sketchModel: string | null;
-  /** Why sketch-guided generation is off: never set up, no credit left, or the key was rejected. */
-  reason?: "not_configured" | "credit" | "key" | null;
+  reason: AiAvailability;
 };
 
 export async function getAiCapabilities(): Promise<AiCapabilities> {
   try {
     return await request<AiCapabilities>("/ai/capabilities");
   } catch {
-    return { sketch: false, sketchModel: null };
+    return { text: false, textReason: "unreachable", sketch: false, sketchModel: null, reason: "unreachable" };
   }
 }
 
@@ -237,8 +240,8 @@ export async function generateAiImage(
   }
 
   const jobId = initial.jobId;
-  const maxAttempts = 100; // 100 * 1500ms = 150 seconds (2.6)
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  const deadline = Date.now() + 160_000;
+  while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const status = await request<{
       status: "pending" | "processing" | "completed" | "failed";
@@ -278,7 +281,7 @@ export async function generateAiImage(
     }
   }
 
-  throw new Error("Image enhancement timed out.");
+  throw new Error("Image generation took too long. Try again in a moment.");
 }
 
 /**

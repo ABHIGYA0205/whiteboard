@@ -67,7 +67,7 @@ function validateEnv() {
   return {
     port,
     mongoUri,
-    hfToken: process.env.HF_TOKEN ?? "",
+    get hfToken() { return process.env.HF_TOKEN?.trim() || ""; },
     get pollinationsApiKey(): string {
       return process.env.POLLINATIONS_API_KEY?.trim() || "";
     },

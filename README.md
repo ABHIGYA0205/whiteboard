@@ -12,7 +12,7 @@ graph TD
     Client -->|REST API /board, /ai, /uploads| Server
     Server -->|Persist Elements & Versioning| Mongo[(MongoDB)]
     Server -->|Static Uploads /uploads| FS[(Disk Storage)]
-    Server -->|AI Image Gen| AI[Pollinations.AI]
+    Server -->|AI Image Gen| AI[Pollinations and Hugging Face]
 ```
 
 ---
@@ -116,7 +116,8 @@ HF_TOKEN=your_token_optional
 
 | Variable | Description |
 |---|---|
-| `POLLINATIONS_API_KEY` | Pollinations secret key. With it a drawing is turned into a picture by FLUX.2 klein (0.005 pollen per picture) and text pictures use `flux` (0.002 pollen). When the key is rejected or the wallet is empty the app says so and offers text only. Without a key the AI feature is text only on the free service: one picture per 45 seconds for all users. |
+| `POLLINATIONS_API_KEY` | Server-side Pollinations secret key for sketch-guided and text image generation. Set it in the Compose root `.env` when using Docker. |
+| `HF_TOKEN` | Server-side Hugging Face token with Inference Providers access. When Pollinations is unavailable, text prompts use FLUX.1-schnell via Hugging Face. Sketches stay on the Pollinations path. Set it in the Compose root `.env` when using Docker. |
 | `SKETCH_WORDING` | Optional. Id of a measured wording from `server/src/config/sketchWordings.ts`. Empty means the measured default. |
 | `POLLINATIONS_TEXT_MODEL` | Optional model for text pictures with a key (default `flux`). |
 

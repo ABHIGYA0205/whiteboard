@@ -4,8 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import {
-  ArrowDown, ArrowRight, ArrowUpRight, Clock3, FileUp, GitFork, LayoutGrid, Link2,
-  MousePointer2, Plus, StickyNote, Workflow, X
+  ArrowRight, ArrowUpRight, Clock3, FileUp, GitFork, LayoutGrid, Link2, Moon, Plus, StickyNote, Sun, Workflow, X
 } from "lucide-react";
 import { BoardLoadingScreen } from "@/components/Common/BoardLoadingScreen";
 import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
@@ -14,6 +13,7 @@ import { readBoardSnapshot } from "@/lib/boardSnapshot";
 import { readRecentBoards, removeRecentBoard, rememberRecentBoard, type RecentBoard } from "@/lib/recentBoards";
 import { BOARD_TEMPLATES } from "@/lib/templates";
 import { DEFAULT_BOARD_TITLE } from "@shared/types";
+import { useBoardStore } from "@/store/boardStore";
 import styles from "./home.module.css";
 
 const starters = [
@@ -23,38 +23,18 @@ const starters = [
   { id: "mindmap", name: "Mind map", detail: "Connect ideas around a central topic.", icon: GitFork }
 ];
 
-function BoardPreview() {
+function TemplatePreview({ id }: { id: string }) {
   return (
-    <figure className={styles.preview} role="img" aria-label="Example sprint planning board with three columns, sticky notes, and collaborator cursors">
-      <div className={styles.previewTop}>
-        <span><LayoutGrid size={14} /> Sprint planning</span>
-        <div className={styles.previewPeople}><span>AK</span><span>JM</span></div>
-      </div>
-      <div className={styles.previewCanvas}>
-        <div className={styles.previewGrid}>
-          <div className={styles.previewLane}>
-            <strong><i /> To do</strong>
-            <div className={styles.blueNote}>Map the signup flow</div>
-            <div className={styles.blueNote}>Review mobile layouts</div>
-          </div>
-          <div className={styles.previewLane}>
-            <strong><i /> In progress</strong>
-            <div className={styles.yellowNote}>Build the first prototype</div>
-          </div>
-          <div className={styles.previewLane}>
-            <strong><i /> Done</strong>
-            <div className={styles.greenNote}>Define launch goals</div>
-          </div>
-        </div>
-        <div className={styles.cursorA}><MousePointer2 size={17} fill="currentColor" /><span>Alex</span></div>
-        <div className={styles.cursorB}><MousePointer2 size={17} fill="currentColor" /><span>Jamie</span></div>
-      </div>
-    </figure>
+    <span className={styles.templatePreview} data-preview={id} aria-hidden="true">
+      <span /><span /><span /><span /><span /><span />
+    </span>
   );
 }
 
 export default function HomePage() {
   const router = useRouter();
+  const theme = useBoardStore((state) => state.theme);
+  const setTheme = useBoardStore((state) => state.setTheme);
   const [isNavigating, startTransition] = useTransition();
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +44,6 @@ export default function HomePage() {
   const createTrigger = useRef<HTMLElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const fileButton = useRef<HTMLButtonElement>(null);
-  const inviteDialog = useRef<HTMLDialogElement>(null);
   const isOpening = isCreating || isNavigating;
 
   useEffect(() => {
@@ -118,120 +97,144 @@ export default function HomePage() {
     }
   }
 
+  function navigateToBoard(path: string) {
+    setError(null);
+    startTransition(() => router.push(path));
+  }
+
   function openBoardLink(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const value = new FormData(event.currentTarget).get("boardLink");
+    const value = String(new FormData(event.currentTarget).get("boardLink") ?? "").trim();
     try {
-      const url = new URL(String(value).trim(), window.location.origin);
-      if (url.origin !== window.location.origin || !/^\/board\/[a-zA-Z\d_-]+\/?$/.test(url.pathname)) {
+      const current = new URL(window.location.origin);
+      const url = new URL(value, current);
+      const loopback = ["localhost", "127.0.0.1", "[::1]"];
+      const sameServer = url.origin === current.origin || (
+        url.protocol === current.protocol && url.port === current.port &&
+        loopback.includes(url.hostname) && loopback.includes(current.hostname)
+      );
+      if (!sameServer || url.username || url.password || !/^\/board\/[a-zA-Z\d_-]+\/?$/.test(url.pathname)) {
         throw new Error();
       }
-      const path = url.pathname.replace(/\/$/, "") + url.search;
-      inviteDialog.current?.close();
-      startTransition(() => router.push(path));
+      setInviteError(null);
+      navigateToBoard(url.pathname.replace(/\/$/, "") + url.search);
     } catch {
-      setInviteError("Enter a board link from this Canvas Flow site.");
+      setInviteError("Paste a board or invite link from this Canvas Flow site.");
     }
   }
 
   return (
-    <main className={styles.home}>
-      <div inert={isOpening} className={styles.container}>
+    <main className={styles.home} data-workspace-home>
+      <div className={styles.page} inert={isOpening}>
         <header className={styles.header}>
-          <Link href="/" className={styles.brand}><CanvasFlowLogo size={30} /> Canvas Flow</Link>
-          <nav aria-label="Workspace">
-            <a className={styles.navLink} href="#recent">Recent boards</a>
-            <a className={styles.navLink} href="#templates">Templates</a>
-            <button className={styles.linkButton} onClick={() => {
-              setInviteError(null);
-              inviteDialog.current?.showModal();
-            }}><Link2 size={17} /> Open board link</button>
-          </nav>
+          <div className={styles.headerInner}>
+            <Link href="/" className={styles.brand}><CanvasFlowLogo size={30} /> Canvas Flow</Link>
+            <nav aria-label="Workspace">
+              <a href="#recent">Recent</a>
+              <a href="#templates">Templates</a>
+            </nav>
+            <button className={styles.themeButton} type="button"
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          </div>
         </header>
 
-        <section className={styles.hero} aria-labelledby="home-title">
-          <div className={styles.heroCopy}>
-            <p className={styles.eyebrow}>The collaborative whiteboard</p>
-            <h1 id="home-title">A shared canvas<br className={styles.desktopBreak} /> for <em>big ideas.</em></h1>
-            <p className={styles.summary}>Sketch a plan, map a workflow, or run a team session. Share one link and work together live.</p>
-            <div className={styles.heroActions}>
-              <button id="hero-create-board-btn" className={styles.primary} disabled={isOpening}
-                onClick={(event) => void openNewBoard(event.currentTarget)}>
-                <Plus size={19} /> Create New Board
-              </button>
-              <a href="#templates" className={styles.secondary}>Browse templates <ArrowDown size={15} /></a>
+        <div className={styles.container}>
+          <section className={styles.intro} aria-labelledby="home-title">
+            <div>
+              <h1 id="home-title">Your workspace</h1>
+              <p>Pick up a recent board, join a teammate, or start with a template.</p>
             </div>
-            <p className={styles.note}>No account needed to start a board.</p>
-          </div>
-          <BoardPreview />
-        </section>
-
-        {error && <p className={styles.error} role="alert">{error}</p>}
-
-        <section id="recent" className={styles.section} aria-labelledby="recent-title">
-          <div className={styles.sectionHeader}>
-            <div><h2 id="recent-title">Recent boards</h2><p>Boards you’ve opened in this browser.</p></div>
-            <button ref={fileButton} type="button" className={styles.linkButton} disabled={isOpening}
-              onClick={() => fileInput.current?.click()}>
-              <FileUp size={17} /> Import JSON
+            <button id="hero-create-board-btn" type="button" className={styles.primary} disabled={isOpening}
+              onClick={(event) => void openNewBoard(event.currentTarget)}>
+              <Plus size={19} /> Create New Board
             </button>
-            <input hidden ref={fileInput} type="file" accept=".json,application/json" aria-label="Import board snapshot"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) void openNewBoard(fileButton.current, undefined, file);
-              }} />
+          </section>
+
+          {error && <p className={styles.notice} role="alert">{error}</p>}
+
+          <div className={styles.boardGrid}>
+            <section id="recent" className={styles.panel} aria-labelledby="recent-title" tabIndex={-1}>
+              <div className={styles.sectionHeader}>
+                <h2 id="recent-title">Recent boards</h2>
+                <button ref={fileButton} type="button" className={styles.secondary} disabled={isOpening}
+                  onClick={() => fileInput.current?.click()}>
+                  <FileUp size={17} /> Import JSON
+                </button>
+                <input hidden ref={fileInput} type="file" accept=".json,application/json" aria-label="Import board snapshot"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void openNewBoard(fileButton.current, undefined, file);
+                  }} />
+              </div>
+              {recent.length ? (
+                <ul className={styles.recentList}>
+                  {recent.map((board) => {
+                    const path = `/board/${encodeURIComponent(board.id)}`;
+                    return (
+                      <li key={board.id} className={styles.recentItem}>
+                        <Link href={path} className={styles.recentLink} onNavigate={(event) => {
+                          event.preventDefault();
+                          navigateToBoard(path);
+                        }}>
+                          <span className={styles.recentIcon}><LayoutGrid size={18} /></span>
+                          <span className={styles.recentTitle}>{board.title}</span>
+                          <ArrowUpRight className={styles.recentArrow} size={16} />
+                        </Link>
+                        <button className={styles.removeButton} type="button" onClick={() => setRecent(removeRecentBoard(board.id))}
+                          aria-label={`Remove ${board.title} from recent boards`} title="Remove from recent boards"><X size={17} /></button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className={styles.empty}>
+                  <span className={styles.recentIcon}><Clock3 size={19} /></span>
+                  <div><strong>No recent boards yet</strong><p>Boards you open appear here on this browser.</p></div>
+                </div>
+              )}
+            </section>
+
+            <section className={styles.panel} aria-labelledby="open-board-title">
+              <div className={styles.sectionHeader}>
+                <h2 id="open-board-title"><Link2 size={19} /> Open a board link</h2>
+              </div>
+              <form className={styles.invite} onSubmit={openBoardLink}>
+                <label htmlFor="board-link">Canvas Flow link</label>
+                <input id="board-link" name="boardLink" placeholder="Paste a board or invite link" required
+                  inputMode="url" autoComplete="off" spellCheck={false}
+                  aria-invalid={Boolean(inviteError)} aria-describedby={inviteError ? "board-link-error" : undefined}
+                  onChange={() => setInviteError(null)} />
+                {inviteError && <p id="board-link-error" role="alert">{inviteError}</p>}
+                <button className={styles.secondary} type="submit">Open board <ArrowRight size={17} /></button>
+              </form>
+            </section>
           </div>
-          {recent.length ? (
-            <ul className={styles.recentList}>
-              {recent.map((board) => (
-                <li key={board.id} className={styles.recentItem}>
-                  <Link href={`/board/${encodeURIComponent(board.id)}`} className={styles.recentLink} prefetch={false}>
-                    <span className={styles.recentIcon}><LayoutGrid size={20} /></span>
-                    <span className={styles.recentTitle}>{board.title}</span>
-                    <ArrowUpRight className={styles.recentArrow} size={16} />
-                  </Link>
-                  <button className={styles.removeButton} type="button" onClick={() => setRecent(removeRecentBoard(board.id))}
-                    aria-label={`Remove ${board.title} from recent boards`} title="Remove from recent boards"><X size={17} /></button>
-                </li>
+
+          <section id="templates" className={styles.templates} aria-labelledby="templates-title" tabIndex={-1}>
+            <div className={styles.sectionHeader}>
+              <h2 id="templates-title">Templates</h2>
+            </div>
+            <div className={styles.templateGrid}>
+              {starters.map((starter) => (
+                <button className={styles.template} key={starter.id} disabled={isOpening}
+                  onClick={(event) => void openNewBoard(event.currentTarget, starter)}>
+                  <TemplatePreview id={starter.id} />
+                  <span className={styles.templateInfo}>
+                    <span className={styles.templateName}><starter.icon size={17} strokeWidth={1.8} />
+                      <strong>{starter.name}</strong><ArrowUpRight size={15} className={styles.templateArrow} />
+                    </span>
+                    <span className={styles.templateDetail}>{starter.detail}</span>
+                  </span>
+                </button>
               ))}
-            </ul>
-          ) : (
-            <div className={styles.empty}><span><Clock3 size={19} /></span>
-              <p>Create a board or open an invite to find it here next time.</p></div>
-          )}
-        </section>
-
-        <section id="templates" className={styles.section} aria-labelledby="templates-title">
-          <div className={styles.sectionHeader}>
-            <div><h2 id="templates-title">Start with a template</h2><p>Open a ready-to-edit board for your next session.</p></div>
-          </div>
-          <div className={styles.templateGrid}>
-            {starters.map((starter) => (
-              <button className={styles.template} data-template={starter.id} key={starter.id} disabled={isOpening}
-                onClick={(event) => void openNewBoard(event.currentTarget, starter)}>
-                <span className={styles.templateIcon}><starter.icon size={22} strokeWidth={1.8} /></span>
-                <strong>{starter.name}</strong>
-                <span className={styles.templateDetail}>{starter.detail}</span>
-                <ArrowRight className={styles.templateArrow} size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <footer className={styles.footer}><CanvasFlowLogo size={22} /> Canvas Flow</footer>
-
-        <dialog ref={inviteDialog} className={styles.dialog} aria-labelledby="invite-title">
-          <form onSubmit={openBoardLink}>
-            <button className={styles.dialogClose} type="button" aria-label="Close" onClick={() => inviteDialog.current?.close()}><X size={20} /></button>
-            <h2 id="invite-title">Open a board link</h2>
-            <label htmlFor="board-link">Canvas Flow link</label>
-            <input autoFocus id="board-link" name="boardLink" placeholder="Paste a board or invite link" required
-              autoComplete="off" spellCheck={false} onChange={() => setInviteError(null)} />
-            {inviteError && <p role="alert" className={styles.dialogError}>{inviteError}</p>}
-            <button className={styles.primary} type="submit">Open board <ArrowRight size={17} /></button>
-          </form>
-        </dialog>
+            </div>
+          </section>
+        </div>
       </div>
       {isOpening && <BoardLoadingScreen />}
     </main>
