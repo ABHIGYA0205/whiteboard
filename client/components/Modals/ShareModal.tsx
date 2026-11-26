@@ -24,52 +24,34 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const token = getToken(boardId);
-  const userRole = decodeRole(token);
-  const isOwner = userRole === "owner";
-  const isEditor = userRole === "editor";
-  const cannotShare = isViewer || userRole === "viewer" || (!isOwner && !isEditor);
+  const canShare = !isViewer && decodeRole(token) === "owner";
 
   useEffect(() => {
-    if (!isOpen || cannotShare) return;
+    if (!isOpen || !canShare) return;
 
     let cancelled = false;
     setIsLoading(true);
     setErrorMessage(null);
+    setCopiedType(null);
+    setViewerUrl("");
+    setEditorUrl("");
 
-    const loadLinks = async () => {
-      try {
-        if (isOwner) {
-          const [viewerRes, editorRes] = await Promise.all([
-            createShareLink(boardId, "viewer"),
-            createShareLink(boardId, "editor")
-          ]);
-          if (!cancelled) {
-            setViewerUrl(viewerRes.url);
-            setEditorUrl(editorRes.url);
-          }
-        } else if (isEditor) {
-          const viewerRes = await createShareLink(boardId, "viewer");
-          if (!cancelled) {
-            setViewerUrl(viewerRes.url);
-          }
-        }
-      } catch (err: any) {
+    Promise.all([createShareLink(boardId, "viewer"), createShareLink(boardId, "editor")])
+      .then(([viewer, editor]) => {
         if (!cancelled) {
-          setErrorMessage("Failed to generate share links. Please try again.");
+          setViewerUrl(viewer.url);
+          setEditorUrl(editor.url);
         }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    };
+      })
+      .catch(() => {
+        if (!cancelled) setErrorMessage("Could not generate links. Close this dialog and try again.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
-    void loadLinks();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, boardId, isOwner, isEditor, cannotShare]);
+    return () => { cancelled = true; };
+  }, [isOpen, boardId, canShare]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -83,26 +65,14 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
 
   if (!isOpen) return null;
 
-  const handleCopy = (url: string, type: "viewer" | "editor") => {
+  const handleCopy = async (url: string, type: "viewer" | "editor") => {
     if (!url) return;
-    navigator.clipboard.writeText(url);
-    setCopiedType(type);
-    setTimeout(() => {
-      setCopiedType(null);
-    }, 2500);
-  };
-
-  const maskUrl = (fullUrl: string) => {
-    if (!fullUrl) return "";
+    setErrorMessage(null);
     try {
-      const parsed = new URL(fullUrl);
-      const share = parsed.searchParams.get("share");
-      if (share && share.length > 12) {
-        return `${parsed.origin}${parsed.pathname}?share=${share.slice(0, 6)}...${share.slice(-4)}`;
-      }
-      return `${parsed.origin}${parsed.pathname}?share=...`;
+      await navigator.clipboard.writeText(url);
+      setCopiedType(type);
     } catch {
-      return fullUrl.slice(0, 32) + "...";
+      setErrorMessage("Select the link and copy it manually.");
     }
   };
 
@@ -170,7 +140,7 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
           </button>
         </div>
 
-        {cannotShare ? (
+        {!canShare ? (
           <div
             style={{
               padding: "20px",
@@ -185,12 +155,13 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
             }}
           >
             <AlertCircle size={18} />
-            <span>Viewers cannot share this board. Ask the owner for an invite link.</span>
+            <span>Ask the board owner to create an invite link.</span>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {errorMessage && (
               <div
+                role="alert"
                 style={{
                   padding: "10px 14px",
                   borderRadius: "8px",
@@ -231,9 +202,12 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
                 <input
                   type="text"
                   readOnly
-                  value={isLoading ? "Generating link..." : maskUrl(viewerUrl)}
+                  aria-label="Viewer invite link"
+                  value={isLoading ? "Generating link..." : viewerUrl}
+                  onFocus={(event) => event.currentTarget.select()}
                   style={{
                     flex: 1,
+                    minWidth: 0,
                     background: isLight ? "#ffffff" : "rgba(0, 0, 0, 0.3)",
                     border: isLight ? "1px solid #cbd5e1" : "1px solid rgba(255, 255, 255, 0.1)",
                     borderRadius: "8px",
@@ -268,86 +242,71 @@ export function ShareModal({ isOpen, onClose, boardId, isViewer = false }: Share
             </div>
 
             {/* Editor Link Option */}
-            {isOwner ? (
-              <div
-                style={{
-                  background: isLight ? "#f8fafc" : "rgba(255, 255, 255, 0.03)",
-                  border: isLight ? "1px solid #e2e8f0" : "1px solid rgba(255, 255, 255, 0.08)",
-                  borderRadius: "12px",
-                  padding: "14px"
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <Edit3 size={16} style={{ color: "#3b82f6" }} />
-                    <span style={{ fontWeight: 600, fontSize: "14px", color: isLight ? "#0f172a" : "#f8fafc" }}>
-                      Editor Link
-                    </span>
-                  </div>
-                  <span style={{ fontSize: "11px", color: isLight ? "#64748b" : "#94a3b8" }}>
-                    expires in 7 days
+            <div
+              style={{
+                background: isLight ? "#f8fafc" : "rgba(255, 255, 255, 0.03)",
+                border: isLight ? "1px solid #e2e8f0" : "1px solid rgba(255, 255, 255, 0.08)",
+                borderRadius: "12px",
+                padding: "14px"
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Edit3 size={16} style={{ color: "#3b82f6" }} />
+                  <span style={{ fontWeight: 600, fontSize: "14px", color: isLight ? "#0f172a" : "#f8fafc" }}>
+                    Editor Link
                   </span>
                 </div>
-                <p style={{ margin: "0 0 10px 0", fontSize: "12px", color: isLight ? "#64748b" : "#94a3b8" }}>
-                  Full edit access. Collaborators can draw, edit, move shapes, and auto-save.
-                </p>
-                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                  <input
-                    type="text"
-                    readOnly
-                    value={isLoading ? "Generating link..." : maskUrl(editorUrl)}
-                    style={{
-                      flex: 1,
-                      background: isLight ? "#ffffff" : "rgba(0, 0, 0, 0.3)",
-                      border: isLight ? "1px solid #cbd5e1" : "1px solid rgba(255, 255, 255, 0.1)",
-                      borderRadius: "8px",
-                      padding: "8px 12px",
-                      fontSize: "12px",
-                      color: isLight ? "#334155" : "#cbd5e1",
-                      outline: "none"
-                    }}
-                  />
-                  <button
-                    onClick={() => handleCopy(editorUrl, "editor")}
-                    disabled={isLoading || !editorUrl}
-                    style={{
-                      background: copiedType === "editor" ? "#10b981" : "#3b82f6",
-                      color: "#ffffff",
-                      border: "none",
-                      borderRadius: "8px",
-                      padding: "8px 14px",
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      cursor: isLoading || !editorUrl ? "not-allowed" : "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      transition: "all 0.15s ease"
-                    }}
-                  >
-                    {copiedType === "editor" ? <Check size={14} /> : <Copy size={14} />}
-                    <span>{copiedType === "editor" ? "Copied" : "Copy"}</span>
-                  </button>
-                </div>
+                <span style={{ fontSize: "11px", color: isLight ? "#64748b" : "#94a3b8" }}>
+                  expires in 7 days
+                </span>
               </div>
-            ) : (
-              <div
-                style={{
-                  padding: "12px 14px",
-                  borderRadius: "10px",
-                  background: isLight ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.03)",
-                  border: isLight ? "1px solid #e2e8f0" : "1px solid rgba(255,255,255,0.06)",
-                  color: isLight ? "#64748b" : "#94a3b8",
-                  fontSize: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px"
-                }}
-              >
-                <Edit3 size={15} style={{ opacity: 0.6 }} />
-                <span>Only the board owner can create editor links.</span>
+              <p style={{ margin: "0 0 10px 0", fontSize: "12px", color: isLight ? "#64748b" : "#94a3b8" }}>
+                Full edit access. Collaborators can draw, edit, move shapes, and auto-save.
+              </p>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type="text"
+                  readOnly
+                  aria-label="Editor invite link"
+                  value={isLoading ? "Generating link..." : editorUrl}
+                  onFocus={(event) => event.currentTarget.select()}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    background: isLight ? "#ffffff" : "rgba(0, 0, 0, 0.3)",
+                    border: isLight ? "1px solid #cbd5e1" : "1px solid rgba(255, 255, 255, 0.1)",
+                    borderRadius: "8px",
+                    padding: "8px 12px",
+                    fontSize: "12px",
+                    color: isLight ? "#334155" : "#cbd5e1",
+                    outline: "none"
+                  }}
+                />
+                <button
+                  onClick={() => handleCopy(editorUrl, "editor")}
+                  disabled={isLoading || !editorUrl}
+                  style={{
+                    background: copiedType === "editor" ? "#10b981" : "#3b82f6",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "8px 14px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    cursor: isLoading || !editorUrl ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    transition: "all 0.15s ease"
+                  }}
+                >
+                  {copiedType === "editor" ? <Check size={14} /> : <Copy size={14} />}
+                  <span>{copiedType === "editor" ? "Copied" : "Copy"}</span>
+                </button>
               </div>
-            )}
+            </div>
+
           </div>
         )}
       </div>

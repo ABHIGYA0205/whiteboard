@@ -8,9 +8,10 @@ COPY package*.json ./
 # Copy workspace package.jsons
 COPY client/package.json ./client/
 COPY server/package.json ./server/
+COPY shared/package.json ./shared/
 
 # Install all dependencies (workspaces)
-RUN npm install
+RUN npm ci
 
 # Copy everything
 COPY . .

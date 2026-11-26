@@ -18,23 +18,30 @@ import {
   CloudOff,
   Loader2,
   Clock,
-  Trash2
+  Trash2,
+  Scan
 } from "lucide-react";
 import { useBoardStore } from "@/store/boardStore";
 import { CanvasFlowLogo } from "@/components/Common/CanvasFlowLogo";
 import { exportToSvg, exportSelectionToImage } from "@/components/Canvas/drawingUtils";
+
+import { createBoard } from "@/lib/api";
+import { readBoardSnapshot } from "@/lib/boardSnapshot";
+import { clearRecentBoards, readRecentBoards, rememberRecentBoard, removeRecentBoard, type RecentBoard } from "@/lib/recentBoards";
 
 type SidebarProps = {
   boardId: string;
   saveStatus?: "saved" | "saving" | "conflict" | "error";
   isViewer?: boolean;
   boardTitle?: string;
+  mobileTitleEditor: React.ReactNode;
   onClear: () => void;
+  onFit: () => void;
   onDeleteBoard?: () => void;
   onShowShortcuts?: () => void;
 };
 
-export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, onDeleteBoard, onShowShortcuts }: SidebarProps) {
+export function Sidebar({ boardId, boardTitle, mobileTitleEditor, saveStatus, isViewer, onClear, onFit, onDeleteBoard, onShowShortcuts }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const theme = useBoardStore((state) => state.theme);
   const setTheme = useBoardStore((state) => state.setTheme);
@@ -42,27 +49,12 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const elements = useBoardStore((state) => state.elements);
-  const loadBoard = useBoardStore((state) => state.loadBoard);
-  const [recentBoards, setRecentBoards] = useState<Array<{ id: string; title?: string; visitedAt?: number }>>([]);
-
-  const clearAllRecentBoards = () => {
-    if (typeof window !== "undefined") {
-      try {
-        localStorage.removeItem("whiteboard_recent_boards");
-        setRecentBoards([]);
-      } catch {}
-    }
-  };
+  const [recentBoards, setRecentBoards] = useState<RecentBoard[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined" && isOpen) {
-      try {
-        const stored = localStorage.getItem("whiteboard_recent_boards");
-        if (stored) {
-          setRecentBoards(JSON.parse(stored));
-        }
-      } catch {}
-    }
+    if (isOpen) setRecentBoards(readRecentBoards());
   }, [isOpen]);
 
   useEffect(() => {
@@ -104,25 +96,23 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
     fileInputRef.current?.click();
   };
 
-  const handleFileOpen = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileOpen = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    event.target.value = "";
+    if (!file || isImporting) return;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const content = e.target?.result as string;
-        const parsed = JSON.parse(content);
-        if (Array.isArray(parsed)) {
-          loadBoard(parsed);
-          setIsOpen(false);
-        }
-      } catch (error) {
-        console.error("Failed to parse board file", error);
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
+    setImportError(null);
+    setIsImporting(true);
+    try {
+      const snapshot = await readBoardSnapshot(file);
+      const board = await createBoard(undefined, snapshot);
+      rememberRecentBoard(board.id, board.title ?? snapshot.title);
+      window.location.assign(`/board/${encodeURIComponent(board.id)}`);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not import the board.");
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleSaveTo = () => {
@@ -179,18 +169,6 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
     setIsOpen(false);
   };
 
-  const removeRecentBoard = (idToRemove: string) => {
-    try {
-      const stored = localStorage.getItem("whiteboard_recent_boards");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        const filtered = parsed.filter((b: any) => b.id !== idToRemove);
-        localStorage.setItem("whiteboard_recent_boards", JSON.stringify(filtered));
-        setRecentBoards(filtered);
-      }
-    } catch {}
-  };
-
   return (
     <>
       <button
@@ -239,7 +217,8 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <CanvasFlowLogo size={24} />
               <div>
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg)" }}>{boardTitle || "Canvas Flow"}</div>
+                <div className="sidebar-board-title">{boardTitle || "Canvas Flow"}</div>
+                <div className="sidebar-board-title-editor">{mobileTitleEditor}</div>
                 <div style={{ fontSize: "11px", color: "var(--muted)" }}>#{boardId.slice(0, 8)}</div>
               </div>
             </div>
@@ -276,13 +255,13 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
           accept=".json" 
           onChange={handleFileOpen} 
         />
-        <button className="menu-item" onClick={handleOpenClick} aria-label="Open board file">
+        <button className="menu-item" onClick={handleOpenClick} aria-label="Open board file" disabled={isImporting}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <FolderOpen size={16} />
-            <span>Open</span>
+            <span>{isImporting ? "Importing…" : "Import into new board"}</span>
           </div>
-          <span className="menu-item-shortcut">Cmd+O</span>
         </button>
+        {importError && <p className="menu-item" role="alert">{importError}</p>}
         <button className="menu-item" onClick={handleSaveTo} aria-label="Save board to JSON file">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Save size={16} />
@@ -319,13 +298,17 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
           </div>
           <span className="menu-item-shortcut">?</span>
         </button>
-        <button className="menu-item" onClick={() => { onClear(); setIsOpen(false); }} aria-label="Reset the canvas">
+        <button className="menu-item" onClick={() => { onFit(); setIsOpen(false); }} aria-label="Fit board to screen">
+          <Scan size={16} />
+          <span>Fit board to screen</span>
+        </button>
+        {!isViewer && <button className="menu-item" onClick={() => { onClear(); setIsOpen(false); }} aria-label="Reset the canvas">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <RotateCcw size={16} />
             <span>Reset the canvas</span>
           </div>
-        </button>
-        <button
+        </button>}
+        {onDeleteBoard && <button
           className="menu-item"
           onClick={() => {
             if (window.confirm("Permanently delete this board? This action cannot be undone.")) {
@@ -340,7 +323,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
             <Trash2 size={16} />
             <span>Delete board</span>
           </div>
-        </button>
+        </button>}
 
         <div className="menu-divider" />
 
@@ -374,7 +357,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <h4>Recent Boards</h4>
                 <button
-                  onClick={clearAllRecentBoards}
+                  onClick={() => setRecentBoards(clearRecentBoards())}
                   style={{
                     background: "transparent",
                     border: "none",
@@ -398,7 +381,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
                       className="menu-item"
                       onClick={() => {
                         setIsOpen(false);
-                        window.location.href = `/board/${b.id}`;
+                        window.location.href = `/board/${encodeURIComponent(b.id)}`;
                       }}
                       style={{ fontSize: "12px", padding: "6px 8px", flex: 1, minWidth: 0, justifyContent: "flex-start" }}
                     >
@@ -410,7 +393,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeRecentBoard(b.id);
+                        setRecentBoards(removeRecentBoard(b.id));
                       }}
                       title="Remove from recents"
                       aria-label={`Remove board ${b.id.slice(0, 8)} from recents`}
@@ -440,7 +423,7 @@ export function Sidebar({ boardId, boardTitle, saveStatus, isViewer, onClear, on
           <h4>Links</h4>
           <button className="menu-item" onClick={() => window.location.href = "/"} aria-label="Go to homepage">
             <Globe size={16} />
-            <span>Website</span>
+            <span>Workspace home</span>
           </button>
         </div>
       </div>

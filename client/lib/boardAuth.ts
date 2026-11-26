@@ -37,16 +37,18 @@ export function getToken(boardId: string): string | null {
   }
 }
 
-export function setToken(boardId: string, token: string): void {
+export function setToken(boardId: string, token: string, remember = true): void {
   if (typeof window === "undefined" || !boardId || !token) return;
   tabTokens.set(boardId, token);
   try {
     const key = `canvasflow:token:${boardId}`;
     sessionStorage.setItem(key, token);
+    if (!remember) return;
     // Follow the share link's role in this tab. Keep the strongest reusable
     // credential for new tabs opened from the dashboard.
     const role = decodeRole(token);
-    const storedRole = decodeRole(localStorage.getItem(key));
+    const stored = decodeToken(localStorage.getItem(key));
+    const storedRole = stored && stored.boardId === boardId && stored.exp > Date.now() / 1000 ? stored.role : null;
     if (role && (!storedRole || roleRank[role] >= roleRank[storedRole])) {
       localStorage.setItem(key, token);
     }
@@ -69,6 +71,10 @@ export function clearToken(boardId: string): void {
 }
 
 export function decodeRole(token: string | null | undefined): BoardRole | null {
+  return decodeToken(token)?.role ?? null;
+}
+
+function decodeToken(token: string | null | undefined): BoardTokenPayload | null {
   if (!token || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 2) return null;
@@ -77,9 +83,10 @@ export function decodeRole(token: string | null | undefined): BoardRole | null {
     const payload = JSON.parse(jsonStr) as Partial<BoardTokenPayload>;
     if (
       payload &&
+      typeof payload.boardId === "string" && typeof payload.exp === "number" &&
       (payload.role === "owner" || payload.role === "editor" || payload.role === "viewer")
     ) {
-      return payload.role;
+      return { boardId: payload.boardId, role: payload.role, exp: payload.exp };
     }
   } catch {
     return null;

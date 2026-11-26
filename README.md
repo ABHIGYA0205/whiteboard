@@ -1,4 +1,4 @@
-# Whiteboard
+# Canvas Flow
 
 A high-performance, real-time collaborative whiteboard built with Next.js 16, TypeScript, Node.js Express, Socket.io, Zustand, and MongoDB. Features an infinite canvas, multi-user live cursors, presence awareness with follow-mode, heuristic auto-clean shape detection, and AI sketch enhancement.
 
@@ -18,6 +18,10 @@ graph TD
 ---
 
 ## Features
+
+- **Workspace home**: Create a blank board, choose a starter template, open an invite, or reopen a recent board from this browser.
+- **Board management**: Owners can rename or delete boards. A renamed board updates for collaborators live.
+- **JSON snapshots**: Export a board and restore the snapshot from the home page or the board menu. Import creates a separate board. Image links in a snapshot depend on their original storage.
 
 - **Infinite Canvas**: HTML5 canvas with smooth pan, zoom, pinch-to-zoom, and two-finger mobile touch gestures.
 - **Complete Tool Suite**: Pencil, rectangle, circle, line, arrow, multi-line text with dynamic font scaling, image upload, and eraser.
@@ -76,8 +80,9 @@ The web client batches pointer previews by animation frame and sends only local 
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `POST /board` | POST | Creates a new board document |
-| `GET /board/:id` | GET | Fetches or lazily initializes a board |
+| `POST /board` | POST | Creates a board, optionally with a title and initial elements |
+| `GET /board/:id` | GET | Fetches an existing board when the caller has access |
+| `PATCH /board/:id` | PATCH | Updates the board title using an owner token |
 | `PUT /board/:id` | PUT | Updates board with version checking (returns 409 on conflict) |
 | `POST /board/:id/ops` | POST | Applies element-level operations (`add`, `update`, `delete`) |
 | `POST /board/upload` | POST | Persists image and returns static `/uploads/...` URL |
@@ -176,6 +181,8 @@ npm run build
 ```
 
 
+With the local client and MongoDB-backed API running, use `node tests/workspace.e2e.mjs` to verify creation, sharing, renaming, downloads, and JSON restore.
+
 With the development client and an isolated MongoDB-backed API running, use `node tests/multi-editor.e2e.mjs` to exercise concurrent browser editing, persistence, reconnect, and share roles. Set `BASE_URL` and `API_URL` if using different ports.
 
-For a production server, set `NODE_ENV=production`, a stable random `BOARD_SECRET`, `MONGO_URI`, and the deployed web origin in `CLIENT_ORIGIN`. Check `/health/ready` for MongoDB readiness. The production server returns a storage error during a MongoDB outage so the client can retry unsaved edits.
+For a production server, set `NODE_ENV=production`, a stable random `BOARD_SECRET`, `MONGO_URI`, and the deployed web origins in `CLIENT_ORIGIN` (comma-separated, with the public invite-link origin first). Check `/health/ready` for MongoDB readiness. The production server returns a storage error during a MongoDB outage so the client can retry unsaved edits.

@@ -1,16 +1,19 @@
 "use client";
 
 import { Canvas } from "@/components/Canvas/Canvas";
+import { getCombinedBounds } from "@/components/Canvas/drawingUtils";
 import { Toolbar } from "@/components/Toolbar";
 import { Sidebar } from "@/components/Sidebar";
 import { PropertiesPanel } from "@/components/PropertiesPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { deleteBoardRemote, getBoard, saveBoardChanges, claimBoard } from "@/lib/api";
-import { getToken, setToken, decodeRole } from "@/lib/boardAuth";
+import { deleteBoardRemote, getBoard, saveBoardChanges, claimBoard, renameBoard } from "@/lib/api";
+import { clearToken, getToken, setToken, decodeRole, type BoardRole } from "@/lib/boardAuth";
+import { clearLegacyTitle, readLegacyTitle, rememberRecentBoard, removeRecentBoard } from "@/lib/recentBoards";
 import { useSocket } from "@/hooks/useSocket";
 import { useBoardStore } from "@/store/boardStore";
 import { use, useEffect, useState } from "react";
 import type { PresenceUser, WhiteboardElement } from "@shared/types";
+import { DEFAULT_BOARD_TITLE, MAX_BOARD_TITLE_LENGTH } from "@shared/types";
 import { ShortcutsModal } from "@/components/Modals/ShortcutsModal";
 import { ShareModal } from "@/components/Modals/ShareModal";
 import { TemplatesModal } from "@/components/Modals/TemplatesModal";
@@ -28,6 +31,7 @@ import {
   Eye,
   CheckCircle2,
   CloudOff,
+  Scan,
   Loader2,
   Share2
 } from "lucide-react";
@@ -35,6 +39,19 @@ import {
 type BoardPageProps = {
   params: Promise<{ id: string }>;
 };
+
+function fitBoardContent(elements: WhiteboardElement[]) {
+  const bounds = getCombinedBounds(elements);
+  if (!bounds) return;
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const zoom = Math.min(1, Math.max(0.02, Math.min((width - 72) / bounds.width, (height - 200) / bounds.height)));
+  useBoardStore.getState().setViewport({
+    zoom,
+    x: (width - bounds.width * zoom) / 2 - bounds.x * zoom,
+    y: (height - bounds.height * zoom) / 2 - bounds.y * zoom
+  });
+}
 
 export default function BoardPage({ params }: BoardPageProps) {
   const { id: boardId } = use(params);
@@ -57,6 +74,7 @@ export default function BoardPage({ params }: BoardPageProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [isViewer, setIsViewer] = useState(false);
+  const [boardRole, setBoardRole] = useState<BoardRole | null>(null);
   const [isUnauthenticated, setIsUnauthenticated] = useState(false);
   const [pastedLinkInput, setPastedLinkInput] = useState("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
@@ -71,34 +89,42 @@ export default function BoardPage({ params }: BoardPageProps) {
   const [isUserNameModalOpen, setIsUserNameModalOpen] = useState(false);
   const [isActiveUsersOpen, setIsActiveUsersOpen] = useState(false);
   const [currentUserName, setCurrentUserName] = useState("");
-  const [boardTitle, setBoardTitle] = useState("Untitled Board");
+  const [serverTitle, setServerTitle] = useState(DEFAULT_BOARD_TITLE);
+  const [legacyTitle, setLegacyTitle] = useState<string | null>(null);
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const canManage = boardRole === "owner" && !isViewer;
+  const boardTitle = serverTitle === DEFAULT_BOARD_TITLE && canManage ? legacyTitle ?? serverTitle : serverTitle;
 
-  const handleTitleChange = (newTitle: string) => {
-    setBoardTitle(newTitle);
-    if (typeof window !== "undefined") {
-      try {
-        localStorage.setItem(`whiteboard_title_${boardId}`, newTitle);
-        const stored = localStorage.getItem("whiteboard_recent_boards");
-        let boards = stored ? JSON.parse(stored) : [];
-        let found = false;
-        boards = boards.map((b: any) => {
-          if (b.id === boardId) {
-            found = true;
-            return { ...b, title: newTitle };
-          }
-          return b;
-        });
-        if (!found) {
-          boards.unshift({ id: boardId, title: newTitle, visitedAt: Date.now() });
-        }
-        localStorage.setItem("whiteboard_recent_boards", JSON.stringify(boards.slice(0, 10)));
-      } catch {}
+  async function saveTitle(input: HTMLInputElement) {
+    if (!canManage || isRenaming) return;
+    if (input.dataset.cancelRename) {
+      delete input.dataset.cancelRename;
+      return;
     }
-  };
+    const title = input.value.trim() || DEFAULT_BOARD_TITLE;
+    input.value = title;
+    if (title === serverTitle && !legacyTitle) return;
+    setIsRenaming(true);
+    setTitleError(null);
+    try {
+      const result = await renameBoard(boardId, title);
+      clearLegacyTitle(boardId);
+      setLegacyTitle(null);
+      setServerTitle(result.title);
+      rememberRecentBoard(boardId, result.title);
+    } catch (error) {
+      input.value = boardTitle;
+      setTitleError("Could not save the board name. Try again.");
+      if ((error as { status?: number })?.status === 401) setBoardRole(null);
+    } finally {
+      setIsRenaming(false);
+    }
+  }
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title = boardTitle && boardTitle !== "Untitled Board" ? `${boardTitle} — Canvas Flow` : "Canvas Flow";
+      document.title = boardTitle === DEFAULT_BOARD_TITLE ? "Canvas Flow" : `${boardTitle} — Canvas Flow`;
     }
   }, [boardTitle]);
 
@@ -119,10 +145,10 @@ export default function BoardPage({ params }: BoardPageProps) {
       const params = new URLSearchParams(window.location.search);
       const shareToken = params.get("share");
       if (shareToken) {
-        setToken(boardId, shareToken);
+        setToken(boardId, shareToken, false);
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete("share");
-        window.history.replaceState({}, "", cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ""));
+        window.history.replaceState(window.history.state, "", cleanUrl.pathname + cleanUrl.search);
       }
 
       const activeToken = getToken(boardId);
@@ -133,19 +159,6 @@ export default function BoardPage({ params }: BoardPageProps) {
       }
     }
   }, [boardId, setIsLocked]);
-
-  // P1-6: Track recent boards in localStorage so user can always find them
-  useEffect(() => {
-    if (typeof window !== "undefined" && boardId) {
-      try {
-        const stored = localStorage.getItem("whiteboard_recent_boards");
-        const list: Array<{ id: string; visitedAt: number }> = stored ? JSON.parse(stored) : [];
-        const filtered = list.filter((b) => b.id !== boardId);
-        const updated = [{ id: boardId, visitedAt: Date.now() }, ...filtered].slice(0, 10);
-        localStorage.setItem("whiteboard_recent_boards", JSON.stringify(updated));
-      } catch {}
-    }
-  }, [boardId]);
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -159,8 +172,14 @@ export default function BoardPage({ params }: BoardPageProps) {
 
   const collaboration = useSocket(boardId, {
     enabled: loadedBoardId === boardId && !isUnauthenticated && !loadError,
+    onTitleChange: (title) => {
+      if (title === serverTitle) return;
+      setServerTitle(title);
+      rememberRecentBoard(boardId, title);
+    },
     onJoinDenied: (code) => {
       if (code === "BOARD_NOT_FOUND") {
+        removeRecentBoard(boardId);
         setLoadError("Board not found.");
         return;
       }
@@ -176,6 +195,7 @@ export default function BoardPage({ params }: BoardPageProps) {
     setIsUnauthenticated(false);
     setSaveStatus("saved");
     setSaveError(null);
+    setTitleError(null);
     setClearedElementsBackup(null);
     const load = async () => {
       try {
@@ -192,25 +212,21 @@ export default function BoardPage({ params }: BoardPageProps) {
           }
         }
         if (!controller.signal.aborted) {
-          const isReadOnly = decodeRole(getToken(boardId)) === "viewer";
+          const token = getToken(boardId);
+          if (token) setToken(boardId, token);
+          const role = decodeRole(token);
+          const isReadOnly = role === "viewer";
+          setBoardRole(role);
           setIsViewer(isReadOnly);
           setIsLocked(isReadOnly);
           loadBoard(board.elements, board.version, board.deletedElementIds);
-          const savedTitle =
-            board.title ||
-            (typeof window !== "undefined" ? localStorage.getItem(`whiteboard_title_${boardId}`) : "") ||
-            "Untitled Board";
-          setBoardTitle(savedTitle);
-          if (typeof document !== "undefined") {
-            document.title = savedTitle && savedTitle !== "Untitled Board" ? `${savedTitle} — Canvas Flow` : "Canvas Flow";
-          }
-          try {
-            const stored = localStorage.getItem("whiteboard_recent_boards");
-            let boards = stored ? JSON.parse(stored) : [];
-            boards = boards.filter((b: any) => b.id !== boardId);
-            boards.unshift({ id: boardId, title: savedTitle, visitedAt: Date.now() });
-            localStorage.setItem("whiteboard_recent_boards", JSON.stringify(boards.slice(0, 10)));
-          } catch {}
+          resetViewport();
+          if (board.version === 0) fitBoardContent(board.elements);
+          const title = board.title ?? DEFAULT_BOARD_TITLE;
+          const localTitle = role === "owner" && title === DEFAULT_BOARD_TITLE ? readLegacyTitle(boardId) : null;
+          setServerTitle(title);
+          setLegacyTitle(localTitle);
+          rememberRecentBoard(boardId, localTitle ?? title);
         }
       } catch (error: any) {
         if (controller.signal.aborted) return;
@@ -220,6 +236,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           setIsLocked(true);
           setIsUnauthenticated(true);
         } else {
+          if (error?.status === 404) removeRecentBoard(boardId);
           setLoadError(error?.status === 404 ? "Board not found." : "Could not load the board.");
         }
       } finally {
@@ -228,7 +245,7 @@ export default function BoardPage({ params }: BoardPageProps) {
     };
     void load();
     return () => controller.abort();
-  }, [boardId, loadAttempt, loadBoard, setIsLocked]);
+  }, [boardId, loadAttempt, loadBoard, resetViewport, setIsLocked]);
 
   useEffect(() => {
     if (loadedBoardId !== boardId || isViewer || loadError) return;
@@ -297,14 +314,9 @@ export default function BoardPage({ params }: BoardPageProps) {
   const handleDeleteBoard = async () => {
     try {
       await deleteBoardRemote(boardId);
-      try {
-        const stored = localStorage.getItem("whiteboard_recent_boards");
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          const filtered = parsed.filter((b: any) => b.id !== boardId);
-          localStorage.setItem("whiteboard_recent_boards", JSON.stringify(filtered));
-        }
-      } catch {}
+      removeRecentBoard(boardId);
+      clearLegacyTitle(boardId);
+      clearToken(boardId);
       loadBoard([]);
       window.location.href = "/";
     } catch (error) {
@@ -349,7 +361,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         if (match) token = match[1];
       }
     }
-    setToken(boardId, token);
+    setToken(boardId, token, false);
     if (typeof window !== "undefined") {
       window.location.reload();
     }
@@ -378,6 +390,27 @@ export default function BoardPage({ params }: BoardPageProps) {
     );
   }
 
+  const titleEditor = (
+    <input
+      className="board-title-input"
+      key={`${boardId}:${boardTitle}`}
+      defaultValue={boardTitle}
+      maxLength={MAX_BOARD_TITLE_LENGTH}
+      readOnly={!canManage || isRenaming}
+      title={canManage ? "Click to rename board" : "Board title"}
+      aria-label="Board Title"
+      onBlur={(event) => void saveTitle(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          event.currentTarget.dataset.cancelRename = "true";
+          event.currentTarget.value = boardTitle;
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+
   return (
     <main
       className="board-shell"
@@ -397,45 +430,17 @@ export default function BoardPage({ params }: BoardPageProps) {
         <Sidebar
           boardId={boardId}
           boardTitle={boardTitle}
+          mobileTitleEditor={titleEditor}
           saveStatus={saveStatus}
           isViewer={isViewer}
           onClear={handleClear}
-          onDeleteBoard={handleDeleteBoard}
+          onDeleteBoard={canManage ? handleDeleteBoard : undefined}
+          onFit={() => fitBoardContent(useBoardStore.getState().elements)}
           onShowShortcuts={() => setIsShortcutsOpen(true)}
         />
         <div className="board-title-group" style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "2px" }}>
           <CanvasFlowLogo size={20} style={{ opacity: 0.9 }} />
-          <input
-            className="board-title-input"
-            value={boardTitle}
-            onChange={(e) => handleTitleChange(e.target.value)}
-            disabled={isViewer}
-            title={isViewer ? "Board title (read-only)" : "Click to rename board"}
-            aria-label="Board Title"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: theme === "light" ? "#0f172a" : "#f8fafc",
-              fontWeight: 700,
-              fontSize: "13px",
-              padding: "4px 8px",
-              borderRadius: "6px",
-              width: "130px",
-              maxWidth: "30vw",
-              outline: "none",
-              cursor: isViewer ? "default" : "text",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap"
-            }}
-            onFocus={(e) => {
-              if (!isViewer) {
-                e.target.style.background = theme === "light" ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.08)";
-              }
-            }}
-            onBlur={(e) => {
-              e.target.style.background = "transparent";
-            }}
-          />
+          {titleEditor}
         </div>
         <div className="mobile-header-actions">
           <button
@@ -507,7 +512,7 @@ export default function BoardPage({ params }: BoardPageProps) {
           />
           <span>
             {isUnauthenticated
-              ? "You're viewing this board — ask the owner for edit access."
+              ? "Ask the board owner for a valid invite link."
               : "You have view-only access to this board."}
           </span>
           {isUnauthenticated && (
@@ -741,6 +746,11 @@ export default function BoardPage({ params }: BoardPageProps) {
             <Plus size={15} />
           </button>
 
+          <button className="control-button" onClick={() => fitBoardContent(useBoardStore.getState().elements)}
+            title="Fit board to screen" aria-label="Fit board to screen">
+            <Scan size={15} />
+          </button>
+
           <div className="controls-separator" />
 
           <button
@@ -842,7 +852,7 @@ export default function BoardPage({ params }: BoardPageProps) {
         </div>
       )}
 
-      {saveError ? <div className="status-banner" role="alert">{saveError}</div> : null}
+      {saveError || titleError ? <div className="status-banner" role="alert">{saveError || titleError}</div> : null}
     </main>
   );
 }

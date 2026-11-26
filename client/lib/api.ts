@@ -1,6 +1,5 @@
 import type { BoardDocument, BoardOp, WhiteboardElement } from "@shared/types";
 import { getToken, setToken, clearToken } from "./boardAuth";
-import { useBoardStore } from "@/store/boardStore";
 
 export const getApiUrl = () => {
   const envUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -41,31 +40,22 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
     ...(init?.headers as Record<string, string> ?? {})
   };
 
-  if (boardId) {
-    const token = getToken(boardId);
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-  }
+  const token = boardId ? getToken(boardId) : null;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const response = await fetch(url, {
     ...init,
     headers,
-    signal: init?.signal && typeof AbortSignal.any === "function"
-      ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)])
+    signal: typeof AbortSignal.timeout === "function"
+      ? (init?.signal && typeof AbortSignal.any === "function"
+          ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)])
+          : init?.signal ?? AbortSignal.timeout(30_000))
       : init?.signal
   });
 
   if (!response.ok) {
-    if (response.status === 401 && boardId) {
+    if (response.status === 401 && boardId && token && getToken(boardId) === token) {
       clearToken(boardId);
-      if (typeof window !== "undefined") {
-        try {
-          useBoardStore.getState().setIsLocked(true);
-        } catch {
-          // ignore
-        }
-      }
     }
 
     let message = `Request failed with status ${response.status}`;
@@ -88,10 +78,21 @@ async function request<T>(path: string, init?: RequestInit, explicitBoardId?: st
   return response.json() as Promise<T>;
 }
 
-export async function createBoard(signal?: AbortSignal): Promise<BoardDocument> {
-  const board = await request<BoardDocument & { ownerToken?: string }>("/board", { method: "POST", signal });
+export async function createBoard(
+  signal?: AbortSignal,
+  initial?: { title: string; elements: WhiteboardElement[] }
+): Promise<BoardDocument> {
+  const board = await request<BoardDocument>("/board", {
+    method: "POST", signal, body: initial ? JSON.stringify(initial) : undefined
+  });
   if (board.id && board.ownerToken) setToken(board.id, board.ownerToken);
   return board;
+}
+
+export function renameBoard(id: string, title: string) {
+  return request<{ title: string }>(`/board/${id}`, {
+    method: "PATCH", body: JSON.stringify({ title })
+  }, id);
 }
 
 export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument }> {

@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "Canvas Flow",
-  description: "Ultra-fast infinite collaborative whiteboard with live multi-user drawing, AI diagrams, and vector studio tools.",
+  description: "Sketch plans, map workflows, and work together live on a shared whiteboard.",
+  referrer: "no-referrer",
   icons: {
     icon: [
       { url: "/favicon.ico?v=cf3", sizes: "any" },

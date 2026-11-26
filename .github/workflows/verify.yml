@@ -1,0 +1,65 @@
+name: Verify Canvas Flow
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:7-jammy
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1}).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_URI: mongodb://127.0.0.1:27017/canvasflow_ci
+      CLIENT_ORIGIN: http://localhost:3000,http://127.0.0.1:3001
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:collab
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Run HTTP, WebSocket and browser checks
+        run: |
+          export BOARD_SECRET="$(openssl rand -hex 32)"
+          (cd server && exec env NODE_ENV=test HOST=127.0.0.1 node dist/index.js) > /tmp/canvasflow-api.log 2>&1 &
+          api_pid=$!
+          (cd client && exec node ../node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000) > /tmp/canvasflow-web.log 2>&1 &
+          web_pid=$!
+          (cd client && exec node ../node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3001) > /tmp/canvasflow-dev.log 2>&1 &
+          dev_pid=$!
+          trap 'kill "$api_pid" "$web_pid" "$dev_pid" 2>/dev/null || true' EXIT
+          for url in http://127.0.0.1:4001/health/ready http://127.0.0.1:3000 http://127.0.0.1:3001; do
+            curl --fail --silent --show-error --connect-timeout 2 --retry 20 --retry-all-errors --retry-delay 1 "$url" > /dev/null
+          done
+          node tests/share-auth.e2e.mjs
+          node tests/server.collab.e2e.mjs
+          node tests/live-stroke.e2e.mjs
+          node tests/live-reconnect.e2e.mjs
+          BASE_URL=http://localhost:3000 API_URL=http://localhost:4001 node tests/board-opening.e2e.mjs
+          node tests/workspace.e2e.mjs
+          BASE_URL=http://127.0.0.1:3001 node tests/multi-editor.e2e.mjs
+          node tests/responsive.check.mjs
+      - name: Show application logs
+        if: failure()
+        run: cat /tmp/canvasflow-{api,web,dev}.log 2>/dev/null || true

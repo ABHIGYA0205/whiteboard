@@ -29,22 +29,22 @@ async function start() {
   void connectMongo();
 
   const app = express();
+  app.disable("x-powered-by");
+
+  const isAllowedOrigin = (origin: string | undefined) => {
+    if (!origin || env.clientOrigins.includes(origin)) return true;
+    if (process.env.NODE_ENV === "production") return false;
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin);
+  };
 
   const corsOptions = {
     origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
-      if (!origin || env.clientOrigins.includes(origin)) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
         return;
       }
-      // Allow localhost / 127.0.0.1 on any port, or local LAN IP addresses (192.168.x, 10.x, 172.x)
-      if (
-        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
-        /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+      callback(Object.assign(new Error("Origin is not allowed."), { status: 403 }));
     },
     credentials: true,
     exposedHeaders: ["Retry-After"]
@@ -58,21 +58,21 @@ async function start() {
     next();
   });
 
-  app.use(cors(corsOptions));
-  // Express body limit allowing a true 8 MB image (~10.7 MB as base64) to reach the handler
-  app.use(express.json({ limit: "12mb" }));
-
   // Static uploads directory for persisted images with open CORS for canvas rendering (A1.3)
   app.use(
     "/uploads",
     (_req, res, next) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:");
       next();
     },
-    express.static(getUploadsDir())
+    cors({ origin: "*", methods: ["GET", "HEAD", "OPTIONS"] }),
+    express.static(getUploadsDir(), { fallthrough: false })
   );
+
+  app.use(cors(corsOptions));
+  // Allow an 8 MB image to reach the handler after base64 encoding.
+  app.use(express.json({ limit: "12mb" }));
 
   app.use("/board", boardRouter);
   app.use("/ai", aiRouter);
@@ -131,6 +131,7 @@ async function start() {
   const server = http.createServer(app);
   const io = new Server(server, {
     cors: corsOptions,
+    allowRequest: (request, callback) => callback(null, isAllowedOrigin(request.headers.origin)),
     maxHttpBufferSize: 5e6,
     // Heartbeat must survive a busy event loop. These were 2500/3000, which
     // meant a 3 s stall (large board autosave, slow Mongo, CPU-starved free
@@ -155,7 +156,7 @@ async function start() {
     process.exit(1);
   });
 
-  server.listen(env.port, () => {
+  server.listen(env.port, process.env.HOST || "0.0.0.0", () => {
     console.log(`Server listening on http://localhost:${env.port}`);
     console.log(`Allowed client origins: ${env.clientOrigins.join(", ")}`);
     warnIfLocalStorage();

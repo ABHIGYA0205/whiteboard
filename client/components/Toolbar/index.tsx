@@ -35,7 +35,8 @@ import {
   Workflow,
   Check,
   Diamond,
-  MoreHorizontal
+  MoreHorizontal,
+  X
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -118,7 +119,7 @@ type ToolbarProps = {
 export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isViewer = false }: ToolbarProps) {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceProgress, setEnhanceProgress] = useState(0);
-  const [enhanceError, setEnhanceError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [timer, setTimer] = useState(0);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
@@ -188,55 +189,67 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
 
   const isToolDisabled = (toolId: string) => isViewer && toolId !== "select" && toolId !== "pan";
 
-  // A6.4: Image Tool upload handler
-  const handleImageFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    event.target.value = "";
+    if (!file || isViewer || isLocked) return;
+
+    setImageError(null);
+    if (file.size > 8 * 1024 * 1024) {
+      setImageError("Choose an image smaller than 8 MB.");
+      return;
+    }
 
     const reader = new FileReader();
-    reader.onload = async (e) => {
-      const dataUrl = e.target?.result as string;
-      if (!dataUrl) return;
+    reader.onerror = () => setImageError("Could not read the image.");
+    reader.onload = async () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") return;
 
+      const image = new Image();
+      image.src = dataUrl;
       try {
-        let finalUrl = dataUrl;
-        try {
-          const uploadRes = await uploadImage(dataUrl);
-          if (uploadRes?.url) {
-            finalUrl = resolveImageUrl(uploadRes.url);
-          }
-        } catch {
-          // Fall back to direct data URL if server upload endpoint is unavailable
-        }
-
-        const { viewport } = useBoardStore.getState();
-        const worldX = -viewport.x / viewport.zoom + 150;
-        const worldY = -viewport.y / viewport.zoom + 150;
-
-        const imageElement: WhiteboardElement = {
-          id: crypto.randomUUID(),
-          type: "image",
-          x: worldX,
-          y: worldY,
-          width: 320,
-          height: 240,
-          strokeColor: "#ffffff",
-          strokeWidth: 1,
-          imageUrl: finalUrl,
-          points: []
-        };
-
-        const nextElements = [...useBoardStore.getState().elements, imageElement];
-        commitElements(nextElements);
-        collaboration?.emitDraw(imageElement);
-        setTool("select");
-        selectElement(imageElement.id);
-      } catch (err) {
-        console.error("Failed to load image", err);
+        await image.decode();
+      } catch {
+        setImageError("Could not open this image. Choose a PNG, JPEG, WebP, GIF, or SVG file.");
+        return;
       }
+
+      let finalUrl = dataUrl;
+      try {
+        finalUrl = (await uploadImage(dataUrl)).url;
+      } catch (error) {
+        const status = (error as { status?: number })?.status;
+        if (status && status < 500) {
+          setImageError(error instanceof Error ? error.message : "Could not upload the image.");
+          return;
+        }
+        // Keep the image on the canvas if offline. Autosave uploads it after reconnect.
+      }
+
+      const state = useBoardStore.getState();
+      if (state.isLocked) return;
+      const { viewport } = state;
+      const scale = Math.min(320 / image.naturalWidth, 240 / image.naturalHeight);
+      const imageElement: WhiteboardElement = {
+        id: crypto.randomUUID(),
+        type: "image",
+        x: -viewport.x / viewport.zoom + 150,
+        y: -viewport.y / viewport.zoom + 150,
+        width: image.naturalWidth * scale,
+        height: image.naturalHeight * scale,
+        strokeColor: "#ffffff",
+        strokeWidth: 1,
+        imageUrl: finalUrl,
+        points: []
+      };
+
+      commitElements([...state.elements, imageElement]);
+      collaboration?.emitDraw(imageElement);
+      setTool("select");
+      selectElement(imageElement.id);
     };
     reader.readAsDataURL(file);
-    event.target.value = "";
   };
 
   const handleEnhance = () => {
@@ -763,7 +776,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       )}
 
       {/* Floating error notification below toolbar */}
-      {enhanceError && (
+      {imageError && (
         <div
           style={{
             position: "fixed",
@@ -787,7 +800,8 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           }}
           role="alert"
         >
-          <span>{enhanceError}</span>
+          <span>{imageError}</span>
+          <button type="button" aria-label="Dismiss image error" onClick={() => setImageError(null)}><X size={16} /></button>
         </div>
       )}
 

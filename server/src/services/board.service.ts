@@ -79,7 +79,8 @@ function toBoardDocument(doc: any): BoardDocument {
 
 export async function createBoard(
   id: string = randomUUID(),
-  ownerId?: string
+  ownerId?: string,
+  { title, elements = [] }: Pick<BoardDocument, "title"> & { elements?: WhiteboardElement[] } = {}
 ): Promise<BoardDocument & { ownerToken?: string }> {
   let ownerToken: string | undefined;
   let effectiveOwnerId = ownerId;
@@ -88,6 +89,7 @@ export async function createBoard(
     effectiveOwnerId = hashToken(ownerToken);
   }
 
+  const sanitized = await sanitizeElements(elements);
   if (isMongoConnected()) {
     try {
       const existing = await BoardModel.findOne({ id }).lean();
@@ -99,8 +101,9 @@ export async function createBoard(
       const board = await BoardModel.create({
         id,
         version: 0,
+        title,
         ownerId: effectiveOwnerId,
-        elements: []
+        elements: sanitized
       });
 
       const doc = toBoardDocument(board.toObject());
@@ -121,12 +124,28 @@ export async function createBoard(
     version: 0,
     ownerId: effectiveOwnerId,
     claimable: !hasTokenOwner,
-    elements: [],
+    title,
+    elements: sanitized,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
   inMemoryBoards.set(id, memoryDoc);
   return { ...toBoardDocument(memoryDoc), ownerToken };
+}
+
+export async function renameBoard(id: string, title: string): Promise<void> {
+  if (isMongoConnected()) {
+    const updated = await BoardModel.updateOne({ id }, { $set: { title } }).catch((error) => {
+      throw new BoardStorageUnavailableError(error);
+    });
+    if (!updated.matchedCount) throw new BoardNotFoundError();
+    return;
+  }
+
+  allowMemoryFallback();
+  const board = inMemoryBoards.get(id);
+  if (!board) throw new BoardNotFoundError();
+  inMemoryBoards.set(id, { ...board, title, updatedAt: new Date().toISOString() });
 }
 
 export async function claimBoard(id: string): Promise<{ ownerToken: string; board: BoardDocument } | null> {

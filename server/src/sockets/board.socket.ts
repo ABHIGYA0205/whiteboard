@@ -53,6 +53,10 @@ export function publishBoardDeletion(io: Server, boardId: string) {
   io.in(roomName(boardId)).socketsLeave(roomName(boardId));
 }
 
+export function publishBoardRename(io: Server, boardId: string, title: string) {
+  io.to(roomName(boardId)).emit("board:renamed", { boardId, title });
+}
+
 export function publishBoardClaim(io: Server, boardId: string) {
   const room = liveBoards.get(boardId);
   if (!room) return;
@@ -110,6 +114,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
     for (const id of deletedIds) elements.delete(id);
     socket.emit("board:state", {
       boardId: board.id,
+      title: board.title,
       elements: Array.from(elements.values()),
       deletedIds: Array.from(deletedIds),
       version: Math.max(board.version, room.version)
@@ -276,7 +281,7 @@ export function registerBoardSocket(io: Server, socket: Socket) {
   });
 
   socket.on("delete-board", async ({ boardId }) => {
-    if (!joinedRoom(boardId, true)) return;
+    if (!joinedRoom(boardId, true) || membership?.role !== "owner") return;
     try {
       await deleteBoard(boardId);
       publishBoardDeletion(io, boardId);

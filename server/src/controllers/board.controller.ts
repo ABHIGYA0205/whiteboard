@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { autoCleanElements } from "../services/ai.service";
 import {
   createBoard,
+  renameBoard,
   getBoard,
   updateBoard,
   deleteBoard,
@@ -22,8 +23,9 @@ import {
 import { signBoardToken, verifyBoardToken, BoardRole } from "../utils/token";
 import { env } from "../utils/env";
 import type { BoardDocument, BoardOp } from "@shared/types";
+import { MAX_BOARD_TITLE_LENGTH } from "../shared/types";
 import { isBoardElement, isElementId } from "../utils/boardPayload";
-import { publishBoardClaim, publishBoardDeletion, publishBoardUpdate } from "../sockets/board.socket";
+import { publishBoardClaim, publishBoardDeletion, publishBoardRename, publishBoardUpdate } from "../sockets/board.socket";
 
 function getParamId(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -141,13 +143,61 @@ export async function createBoardController(request: Request, response: Response
             : randomUUID();
       }
     }
-    const board = await createBoard(undefined, legacyOwnerId);
+    const { title: inputTitle, elements } = request.body ?? {};
+    const title = parseBoardTitle(inputTitle);
+    if (inputTitle !== undefined && !title) {
+      response.status(400).json({ error: "Enter a board title between 1 and 100 characters." });
+      return;
+    }
+    if (elements !== undefined && (
+      !Array.isArray(elements) || !elements.every(isBoardElement) ||
+      new Set(elements.map(({ id }) => id)).size !== elements.length
+    )) {
+      response.status(400).json({ error: "The board file contains invalid or duplicate elements." });
+      return;
+    }
+    const board = await createBoard(undefined, legacyOwnerId, { title, elements });
     response.status(201).json(board);
   } catch (error) {
     if (handleBoardError(response, error)) return;
+    if (error instanceof ImageValidationError || error instanceof ImageSizeLimitError) {
+      response.status(error instanceof ImageSizeLimitError ? 413 : 400).json({ error: error.message });
+      return;
+    }
+    if (error instanceof StorageBackendError) {
+      response.status(503).json({ error: "Image storage is unavailable. Try again shortly." });
+      return;
+    }
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to create board."
     });
+  }
+}
+
+function parseBoardTitle(value: unknown): string | undefined {
+  const title = typeof value === "string" ? value.trim() : "";
+  return title && title.length <= MAX_BOARD_TITLE_LENGTH ? title : undefined;
+}
+
+export async function renameBoardController(request: Request, response: Response) {
+  try {
+    const boardId = getParamId(request.params.id);
+    const auth = await authorizeBoard(request, response, boardId, ["owner"]);
+    if (!auth.ok) return;
+
+    const title = parseBoardTitle(request.body?.title);
+    if (!title) {
+      response.status(400).json({ error: "Enter a board title between 1 and 100 characters." });
+      return;
+    }
+    await renameBoard(boardId, title);
+    const io = request.app.get("socket.io");
+    if (io) publishBoardRename(io, boardId, title);
+    response.json({ title });
+  } catch (error) {
+    if (handleBoardError(response, error)) return;
+    console.error("Could not rename board:", error);
+    response.status(500).json({ error: "Could not rename the board." });
   }
 }
 
@@ -369,7 +419,7 @@ export async function cleanBoardController(request: Request, response: Response)
 export async function deleteBoardController(request: Request, response: Response) {
   try {
     const boardId = getParamId(request.params.id);
-    const auth = await authorizeBoard(request, response, boardId, ["owner", "editor"]);
+    const auth = await authorizeBoard(request, response, boardId, ["owner"]);
     if (!auth.ok) {
       return;
     }

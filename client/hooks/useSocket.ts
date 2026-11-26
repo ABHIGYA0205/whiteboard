@@ -1,7 +1,8 @@
 "use client";
 
 import { useBoardStore, registerResyncHandler } from "@/store/boardStore";
-import { getToken } from "@/lib/boardAuth";
+import { clearToken, getToken } from "@/lib/boardAuth";
+import { removeRecentBoard } from "@/lib/recentBoards";
 import type {
   CursorPosition, DrawEventPayload, DrawProgressPayload, Point, PresenceUser, WhiteboardElement
 } from "@shared/types";
@@ -28,12 +29,18 @@ function getStoredName() {
 }
 
 type StrokeProgress = Omit<DrawProgressPayload, "boardId">;
-type StateMessage = { boardId: string; elements: WhiteboardElement[]; deletedIds?: string[]; version?: number };
+type StateMessage = { boardId: string; title?: string; elements: WhiteboardElement[]; deletedIds?: string[]; version?: number };
 
-export function useSocket(boardId: string, options?: { enabled?: boolean; onJoinDenied?: (code: string) => void }) {
+export function useSocket(boardId: string, options?: {
+  enabled?: boolean;
+  onJoinDenied?: (code: string) => void;
+  onTitleChange?: (title: string) => void;
+}) {
   const enabled = options?.enabled ?? true;
   const onJoinDenied = useRef(options?.onJoinDenied);
   onJoinDenied.current = options?.onJoinDenied;
+  const onTitleChange = useRef(options?.onTitleChange);
+  onTitleChange.current = options?.onTitleChange;
   const connectionRef = useRef<{ socket: Socket; boardId: string; joined: boolean } | null>(null);
   const frameRef = useRef<number | null>(null);
   const lastResyncRef = useRef(0);
@@ -233,6 +240,7 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
         if (message.boardId !== boardId) return;
         window.clearTimeout(retryTimer);
         state().mergeRemoteElements(message.elements, message.deletedIds, message.version, "snapshot");
+        if (message.title) onTitleChange.current?.(message.title);
         const wasJoined = connection.joined;
         connection.joined = true;
         if (!wasJoined) {
@@ -242,6 +250,9 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
           }
           collaboration.emitReplace(undefined, true);
         }
+      });
+      activeSocket.on("board:renamed", ({ boardId: target, title }: { boardId: string; title: string }) => {
+        if (target === boardId) onTitleChange.current?.(title);
       });
       activeSocket.on("board:committed", (message: StateMessage) => {
         if (message.boardId === boardId) {
@@ -271,7 +282,10 @@ export function useSocket(boardId: string, options?: { enabled?: boolean; onJoin
         if (target === boardId) state().setPresenceUsers(users);
       });
       activeSocket.on("clear-board", () => state().applyRemoteClear());
-      activeSocket.on("board-deleted", () => {
+      activeSocket.on("board-deleted", ({ boardId: target }: { boardId: string }) => {
+        if (target !== boardId) return;
+        removeRecentBoard(boardId);
+        clearToken(boardId);
         // Navigation after a confirmed delete should bypass the unsaved-work guard.
         state().loadBoard([]);
         window.location.replace("/");

@@ -1108,8 +1108,21 @@ button {
 }
 
 .board-title-input {
-  max-width: 30vw !important;
+  width: min(155px, 30vw);
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
 }
+
+.board-title-input:not([readonly]):focus { background: var(--hover-bg); }
+.sidebar-board-title { color: var(--fg); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.sidebar-board-title-editor { display: none; }
 
 @keyframes fadeIn {
   from {
@@ -1484,11 +1497,18 @@ button {
   }
 }
 
-/* Hide board title below 600px */
 @media (max-width: 600px) {
   .board-title-group {
     display: none !important;
   }
+  .sidebar-board-title { display: none; }
+  .sidebar-board-title-editor { display: block; }
+  .sidebar-board-title-editor .board-title-input {
+    width: min(195px, 62vw);
+    padding: 3px 4px;
+    font-size: 16px;
+  }
+  .sidebar-board-title-editor .board-title-input:not([readonly]) { border-color: var(--panel-border); }
 }
 
 /* ──────── Accessibility (A6.5) ──────── */

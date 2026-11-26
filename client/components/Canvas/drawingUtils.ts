@@ -880,15 +880,17 @@ export function exportSketchForAi(
   }
 }
 
-/**
- * F1.11: Exports whiteboard elements into a standalone vector SVG string
- */
+function escapeXml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Export whiteboard elements as a standalone SVG. */
 export function exportToSvg(
   elements: WhiteboardElement[],
   backgroundColor: string = "#010409"
 ): string {
   if (elements.length === 0) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="${backgroundColor}"/></svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="${escapeXml(backgroundColor)}"/></svg>`;
   }
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -909,25 +911,25 @@ export function exportToSvg(
   const svgParts: string[] = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBoxX} ${viewBoxY} ${width} ${height}">`,
-    `  <rect x="${viewBoxX}" y="${viewBoxY}" width="${width}" height="${height}" fill="${backgroundColor}" />`
+    `  <rect x="${viewBoxX}" y="${viewBoxY}" width="${width}" height="${height}" fill="${escapeXml(backgroundColor)}" />`
   ];
 
   for (const el of elements) {
     const b = getNormalizedBounds(el);
-    const stroke = el.strokeColor || "#ffffff";
+    const stroke = escapeXml(el.strokeColor || "#ffffff");
     const strokeWidth = el.strokeWidth || 2;
-    const fill = el.fillColor && el.fillColor !== "transparent" ? el.fillColor : "none";
+    const fill = el.fillColor && el.fillColor !== "transparent" ? escapeXml(el.fillColor) : "none";
 
     if (el.type === "rectangle") {
       svgParts.push(`  <rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" rx="4" />`);
     } else if (el.type === "sticky") {
-      const noteBg = el.fillColor && el.fillColor !== "transparent" ? el.fillColor : "#fef08a";
+      const noteBg = fill === "none" ? "#fef08a" : fill;
       svgParts.push(`  <g>`);
       svgParts.push(`    <rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" fill="${noteBg}" stroke="${stroke}" stroke-width="1" rx="8" />`);
       if (el.text) {
         const lines = el.text.split("\n");
         lines.forEach((line, i) => {
-          svgParts.push(`    <text x="${b.x + 16}" y="${b.y + 24 + i * 22}" fill="#1e293b" font-family="sans-serif" font-size="${el.fontSize || 16}">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`);
+          svgParts.push(`    <text x="${b.x + 16}" y="${b.y + 24 + i * 22}" fill="#1e293b" font-family="sans-serif" font-size="${el.fontSize || 16}">${escapeXml(line)}</text>`);
         });
       }
       svgParts.push(`  </g>`);
@@ -941,10 +943,10 @@ export function exportToSvg(
     } else if (el.type === "text" && el.text) {
       const lines = el.text.split("\n");
       lines.forEach((line, i) => {
-        svgParts.push(`  <text x="${b.x}" y="${b.y + 20 + i * (el.fontSize || 24) * 1.2}" fill="${stroke}" font-family="sans-serif" font-size="${el.fontSize || 24}">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`);
+        svgParts.push(`  <text x="${b.x}" y="${b.y + 20 + i * (el.fontSize || 24) * 1.2}" fill="${stroke}" font-family="sans-serif" font-size="${el.fontSize || 24}">${escapeXml(line)}</text>`);
       });
     } else if (el.type === "image" && el.imageUrl) {
-      const resolvedUrl = resolveImageUrl(el.imageUrl);
+      const resolvedUrl = escapeXml(resolveImageUrl(el.imageUrl));
       svgParts.push(`  <image href="${resolvedUrl}" x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" />`);
     }
   }
