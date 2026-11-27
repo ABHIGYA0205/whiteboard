@@ -201,10 +201,14 @@ export default function HomePage() {
                     const path = `/board/${encodeURIComponent(board.id)}`;
                     return (
                       <li key={board.id} className={styles.recentItem}>
-                        <Link href={path} className={styles.recentLink} onNavigate={(event) => {
-                          event.preventDefault();
-                          navigateToBoard(path);
-                        }}>
+                        <Link
+                          href={path}
+                          className={styles.recentLink}
+                          onNavigate={(event: { preventDefault: () => void }) => {
+                            event.preventDefault();
+                            navigateToBoard(path);
+                          }}
+                        >
                           <span className={styles.recentIcon}><LayoutGrid size={18} /></span>
                           <span className={styles.recentTitle}>{board.title}</span>
                           <ArrowUpRight className={styles.recentArrow} size={16} />
