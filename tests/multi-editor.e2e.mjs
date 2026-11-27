@@ -229,14 +229,20 @@ try {
   await joining.getByRole("textbox", { name: "Your name" }).fill("Avery");
   await joining.getByRole("button", { name: "Continue to Board" }).click();
   releaseJoin();
-  await alice.getByTitle("Avery", { exact: true }).waitFor();
+  const presenceButton = alice.getByRole("button", { name: "Active collaborators" });
+  const collaborators = alice.getByRole("dialog", { name: "Active Collaborators" });
+  // The avatar stack only shows a subset of collaborators at this viewport size.
+  await presenceButton.click();
+  await collaborators.getByText("Avery", { exact: true }).waitFor();
+  await collaborators.getByRole("button", { name: "Close active collaborators" }).click();
   await joining.mouse.move(710, 555);
   await alice.locator(".remote-cursor-badge").getByText("Avery", { exact: true }).waitFor();
 
   // Rename over the joined connection without moving the guest's pointer.
   updateName("Avery Kim");
-  await alice.getByTitle("Avery Kim", { exact: true }).waitFor();
   await alice.locator(".remote-cursor-badge").getByText("Avery Kim", { exact: true }).waitFor();
+  await presenceButton.click();
+  await collaborators.getByText("Avery Kim", { exact: true }).waitFor();
   await joiningContext.close();
   console.log("PASS  the owner sees names entered during join and subsequent cursor-label renames");
 
