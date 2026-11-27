@@ -9,7 +9,7 @@ COPY server/package.json ./server/
 COPY shared/ ./shared/
 
 # Install dependencies for all workspaces
-RUN npm install
+RUN npm ci
 
 # Copy the rest of the source code
 COPY . .

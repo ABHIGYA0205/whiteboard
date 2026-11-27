@@ -478,7 +478,7 @@ test("two users change layers, add elements and undo in a long random sequence: 
     peer.receive(answer.elements, answer.deletedIds);
   };
 
-  for (let step = 0; step < 600; step++) {
+  for (let step = 0; step < 900; step++) {
     const action = pick(["add", "add", "peerAdd", "layer", "layer", "layer", "peerLayer", "peerLayer", "undo", "redo"]);
     if (action === "add") {
       add(el(`a${created++}`));
@@ -511,7 +511,13 @@ test("two users change layers, add elements and undo in a long random sequence: 
 
     const mine = ids(store().elements);
     assert.equal(ids(peer.elements), mine, `step ${step} (${action}): the other user sees another order`);
-    const shuffled = [...server.stored].sort(() => random() - 0.5);
+    // Use a fixed shuffle algorithm so the seeded scenario runs identically
+    // across Node/V8 versions. Array.sort assumes a consistent comparator.
+    const shuffled = [...server.stored];
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const other = Math.floor(random() * (index + 1));
+      [shuffled[index], shuffled[other]] = [shuffled[other], shuffled[index]];
+    }
     assert.equal(ids(freshLoad(shuffled).filter((element) => layerOf(element) !== null)), ids(store().elements.filter((element) => layerOf(element) !== null)), `step ${step} (${action}): a fresh load orders the numbered elements differently`);
     assert.equal(ids(freshLoad()), mine, `step ${step} (${action}): a fresh load gives another order`);
   }

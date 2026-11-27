@@ -25,6 +25,8 @@ services:
       MONGO_URI: mongodb://mongo:27017/whiteboard
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000,http://localhost:3001}
       BOARD_SECRET: ${BOARD_SECRET:?Set BOARD_SECRET in the Compose .env file}
+      POLLINATIONS_API_KEY: ${POLLINATIONS_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - uploads_data:/app/server/uploads
     healthcheck:

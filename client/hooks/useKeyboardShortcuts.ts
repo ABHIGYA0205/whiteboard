@@ -55,6 +55,7 @@ export function useKeyboardShortcuts({
       const isTyping =
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
         Boolean(target?.isContentEditable) ||
         activeEl?.tagName === "INPUT" ||
         activeEl?.tagName === "TEXTAREA" ||

@@ -1,10 +1,12 @@
 import "@/styles/globals.css";
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { WorkspaceTheme } from "@/components/Common/WorkspaceTheme";
 
 export const metadata: Metadata = {
   title: "Canvas Flow",
-  description: "Ultra-fast infinite collaborative whiteboard with live multi-user drawing, AI diagrams, and vector studio tools.",
+  description: "Sketch plans, map workflows, and work together live on a shared whiteboard.",
+  referrer: "no-referrer",
   icons: {
     icon: [
       { url: "/favicon.ico?v=cf3", sizes: "any" },
@@ -25,16 +27,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html
-      lang="en"
-      data-theme="dark"
-      style={{
-        margin: 0,
-        padding: 0,
-        background: "#010409",
-        colorScheme: "dark"
-      }}
-    >
+    <html lang="en" data-theme="dark">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -47,17 +40,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="icon" href="/icon.svg?v=cf3" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="/icon.png?v=cf3" />
       </head>
-      <body
-        style={{
-          margin: 0,
-          padding: 0,
-          background: "#010409",
-          color: "#ececf1",
-          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          minHeight: "100vh",
-          overflowX: "hidden"
-        }}
-      >
+      <body>
+        <WorkspaceTheme />
         {children}
       </body>
     </html>

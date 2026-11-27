@@ -297,7 +297,7 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   laserPoints: [],
   theme: "dark",
   isLocked: false,
-  isPropertiesOpen: typeof window !== "undefined" ? window.innerWidth > 1024 : true,
+  isPropertiesOpen: typeof window !== "undefined" ? window.innerWidth >= 1280 : true,
   setIsPropertiesOpen: (isPropertiesOpen) => set({ isPropertiesOpen }),
   togglePropertiesOpen: () => set((state) => ({ isPropertiesOpen: !state.isPropertiesOpen })),
   setIsLocked: (isLocked) => set({ isLocked }),

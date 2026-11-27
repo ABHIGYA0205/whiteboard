@@ -120,7 +120,7 @@ export function ActiveUsersModal({
           borderRadius: "16px",
           width: "100%",
           maxWidth: "380px",
-          padding: "20px",
+          padding: "clamp(14px, 4vw, 20px)",
           boxShadow: isLight
             ? "0 20px 50px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.04)"
             : "0 25px 60px rgba(0, 0, 0, 0.8)",
@@ -132,6 +132,7 @@ export function ActiveUsersModal({
           animation: "slideDownCollaborators 0.2s cubic-bezier(0.16, 1, 0.3, 1)"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog"
         role="dialog"
         aria-label="Active Collaborators"
       >
@@ -149,11 +150,12 @@ export function ActiveUsersModal({
         `}</style>
 
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
             <div
               style={{
                 width: "36px",
+                flexShrink: 0,
                 height: "36px",
                 borderRadius: "10px",
                 background: "#6366f1",
@@ -166,7 +168,7 @@ export function ActiveUsersModal({
               <Users size={18} />
             </div>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px 6px" }}>
                 <h3
                   style={{
                     margin: 0,
@@ -201,7 +203,7 @@ export function ActiveUsersModal({
                       boxShadow: "0 0 6px #10b981"
                     }}
                   />
-                  {displayUsers.length} {displayUsers.length === 1 ? "Online" : "Collaborating"}
+                  {displayUsers.length} online
                 </span>
               </div>
               <p style={{ margin: "2px 0 0", fontSize: "12px", color: isLight ? "#64748b" : "#94a3b8" }}>
@@ -219,6 +221,7 @@ export function ActiveUsersModal({
               color: isLight ? "#475569" : "#9ca3af",
               borderRadius: "8px",
               padding: "6px",
+              flexShrink: 0,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",

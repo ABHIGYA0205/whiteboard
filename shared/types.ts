@@ -84,6 +84,9 @@ export type BoardDocument = {
   updatedAt?: string;
 };
 
+export const DEFAULT_BOARD_TITLE = "Untitled Board";
+export const MAX_BOARD_TITLE_LENGTH = 100;
+
 export type BoardOp = {
   op: "add" | "update" | "delete";
   element: WhiteboardElement;

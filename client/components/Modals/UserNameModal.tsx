@@ -90,7 +90,7 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
           borderRadius: "20px",
           width: "100%",
           maxWidth: "440px",
-          padding: "36px 32px 32px",
+          padding: "clamp(14px, 4vw, 32px)",
           boxShadow: isLight
             ? "0 25px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
             : "0 30px 80px rgba(0, 0, 0, 0.8)",
@@ -101,6 +101,10 @@ export function UserNameModal({ isOpen, initialName = "", onSave, onClose }: Use
           overflow: "hidden"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose your display name"
       >
         {/* Avatar header */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", position: "relative" }}>

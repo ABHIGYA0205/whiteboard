@@ -52,6 +52,7 @@ function makeTestPng(width = 512, height = 512, strokeHex = "#000000"): string {
 describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.POLLINATIONS_API_KEY;
+  const originalHfToken = process.env.HF_TOKEN;
   const originalWording = process.env.SKETCH_WORDING;
 
   let server: any = null;
@@ -80,6 +81,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
 
   beforeEach(async () => {
     resetRateLimitsForTesting();
+    delete process.env.HF_TOKEN;
     recordedRequests.length = 0;
 
     setBlobTokenForTesting("mock-blob-token");
@@ -145,6 +147,8 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     } else {
       process.env.SKETCH_WORDING = originalWording;
     }
+    if (originalHfToken === undefined) delete process.env.HF_TOKEN;
+    else process.env.HF_TOKEN = originalHfToken;
     resetRateLimitsForTesting();
     setBlobTokenForTesting(null);
     setBlobPutForTesting(null);
@@ -174,27 +178,16 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     assert.equal(recordedRequests.length, 0, "Zero upstream requests");
   });
 
-  // 2. Visible sketch, allowTextOnly: true: one upstream text request, job sketchGuided: false
-  test("2. Without a key: visible sketch, allowTextOnly: true -> 1 text request, job sketchGuided: false", async () => {
+  test("Text generation without credentials reports setup and makes no upstream request", async () => {
     delete process.env.POLLINATIONS_API_KEY;
-    const sketch = makeTestPng(512, 512, "#000000");
     const res = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: "a red apple",
-        imageBase64: sketch,
-        allowTextOnly: true
-      })
+      body: JSON.stringify({ prompt: "a red apple", allowTextOnly: true })
     });
-
-    assert.equal(res.status, 202);
-    const { jobId } = (await res.json()) as any;
-    const job = await waitForJob(jobId);
-
-    assert.equal(job.status, "completed");
-    assert.equal(job.sketchGuided, false);
-    assert.equal(recordedRequests.length, 1);
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, "AI_NOT_CONFIGURED");
+    assert.equal(recordedRequests.length, 0);
   });
 
   // 3. GET /ai/capabilities is { sketch: false, sketchModel: null, reason: "not_configured" }
@@ -203,7 +196,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     const res = await fetch(`${baseUrl}/ai/capabilities`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body, { sketch: false, sketchModel: null, reason: "not_configured" });
+    assert.deepEqual(body, { text: false, textReason: "not_configured", sketch: false, sketchModel: null, reason: "not_configured" });
   });
 
   // --- With a key ---
@@ -214,7 +207,7 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     const res = await fetch(`${baseUrl}/ai/capabilities`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body, { sketch: true, sketchModel: SKETCH_MODEL, reason: null });
+    assert.deepEqual(body, { text: true, textReason: null, sketch: true, sketchModel: SKETCH_MODEL, reason: null });
   });
 
   // 5. A 768x384 PNG with dark strokes, style digital, fixed seed -> 1 upstream edit request, job sketchGuided: true
@@ -541,18 +534,79 @@ describe("AI Generation Pipeline (Dual Mode: Sketch & Text)", () => {
     assert.deepEqual(dim, { width: 1024, height: 512 });
   });
 
-  test("Across all requests no request goes to aihorde.net or huggingface.co", async () => {
-    delete process.env.POLLINATIONS_API_KEY;
-    await fetch(`${baseUrl}/ai/generate`, {
+  test("Pollinations refusal falls back to Hugging Face and stores the returned image", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    process.env.HF_TOKEN = "hf_synthetic_test";
+    upstreamHandler = async (input, init) => {
+      const url = new URL(input.toString());
+      if (url.origin === "https://gen.pollinations.ai") return new Response(null, { status: 402 });
+      if (url.hostname === "huggingface.co") {
+        return Response.json({
+          inferenceProviderMapping: { "fal-ai": { status: "live", providerId: "fal-ai/flux/schnell", task: "text-to-image" } }
+        });
+      }
+      if (url.hostname === "router.huggingface.co" && init?.method === "POST") {
+        const headers = new Headers(init.headers);
+        assert.equal(headers.get("authorization"), "Bearer hf_synthetic_test");
+        const payload = JSON.parse(String(init.body));
+        assert.match(payload.prompt, /purple kite/);
+        assert.equal(payload.image_url, undefined);
+        return Response.json({
+          request_id: "unit-image", status: "COMPLETED",
+          response_url: "https://queue.fal.run/fal-ai/flux/requests/unit-image"
+        });
+      }
+      if (url.hostname === "router.huggingface.co") {
+        return Response.json({ images: [{ url: "https://test-output.invalid/kite.png" }] });
+      }
+      assert.equal(url.href, "https://test-output.invalid/kite.png");
+      assert.equal(new Headers(init?.headers).has("authorization"), false);
+      return new Response(mockImagePng, { headers: { "Content-Type": "image/png" } });
+    };
+
+    const response = await fetch(`${baseUrl}/ai/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "check domains" })
+      body: JSON.stringify({ prompt: "a purple kite", seed: 17 })
     });
+    assert.equal(response.status, 202);
+    const job = await waitForJob((await response.json()).jobId);
+    assert.equal(job.status, "completed");
+    assert.equal(job.provider, "Hugging Face");
+    assert.equal(job.sketchGuided, false);
+    assert.ok(job.imageUrl);
+    assert.equal(recordedRequests.filter(({ url }) => url.includes("gen.pollinations.ai")).length, 1);
+    assert.ok(recordedRequests.some(({ url }) => url.includes("router.huggingface.co")));
+  });
 
-    await new Promise((r) => setTimeout(r, 100));
-    for (const req of recordedRequests) {
-      assert.ok(!req.url.includes("aihorde.net"), "Must not call aihorde.net");
-      assert.ok(!req.url.includes("huggingface.co"), "Must not call huggingface.co");
-    }
+  test("Hugging Face HTTP 402 is reported as credit exhaustion", async () => {
+    delete process.env.POLLINATIONS_API_KEY;
+    process.env.HF_TOKEN = "hf_synthetic_test";
+    upstreamHandler = async () => new Response("Payment required", { status: 402 });
+    const response = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "a purple kite" })
+    });
+    const job = await waitForJob((await response.json()).jobId);
+    assert.equal(job.errorCode, "IMAGE_CREDIT");
+    assert.match(job.error, /Hugging Face/);
+    const availability = await (await fetch(`${baseUrl}/ai/capabilities`)).json();
+    assert.equal(availability.text, false);
+    assert.equal(availability.textReason, "credit");
+  });
+
+  test("Rejected prompts do not get sent to a second provider", async () => {
+    process.env.POLLINATIONS_API_KEY = "test-key-12345";
+    process.env.HF_TOKEN = "hf_synthetic_test";
+    upstreamHandler = async () => new Response(null, { status: 422 });
+    const response = await fetch(`${baseUrl}/ai/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "a purple kite" })
+    });
+    const job = await waitForJob((await response.json()).jobId);
+    assert.equal(job.errorCode, "PROMPT_REJECTED");
+    assert.equal(recordedRequests.length, 1);
   });
 });

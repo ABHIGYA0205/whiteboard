@@ -1,8 +1,8 @@
 "use client";
 
 import { TOOL_OPTIONS } from "@/components/Canvas/tools";
-import { exportSelectionToImage, exportSketchForAi, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
-import { enhanceSketch, uploadImage, resolveImageUrl } from "@/lib/api";
+import { exportSketchForAi, getNormalizedBounds } from "@/components/Canvas/drawingUtils";
+import { uploadImage, resolveImageUrl } from "@/lib/api";
 import { pickSketchElements } from "@/lib/sketchSelection";
 import { useBoardStore } from "@/store/boardStore";
 import { useState, useEffect, useRef } from "react";
@@ -18,24 +18,17 @@ import {
   MoveUpRight,
   Type,
   Eraser,
-  Sparkles,
   Lock,
   Image as ImageIcon,
-  Trash2,
-  ChevronDown,
   Palette,
-  Flame,
-  Zap,
-  Box,
-  Laptop,
-  Paintbrush,
   StickyNote,
   Crosshair,
   LayoutTemplate,
   Workflow,
-  Check,
+  Wand2,
   Diamond,
-  MoreHorizontal
+  MoreHorizontal,
+  X
 } from "lucide-react";
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -73,37 +66,6 @@ const SECONDARY_TOOLS = [
   { id: "laser", label: "Laser Pointer", shortcut: "K" }
 ] as const;
 
-const getPaletteColors = (theme: "dark" | "light") => [
-  { name: theme === "light" ? "Black" : "White", value: theme === "light" ? "#1e293b" : "#ececf1" },
-  { name: "Red", value: "#ff4444" },
-  { name: "Orange", value: "#ff9500" },
-  { name: "Yellow", value: "#ffcc00" },
-  { name: "Green", value: "#34c759" },
-  { name: "Blue", value: "#007aff" },
-  { name: "Purple", value: "#af52de" },
-  { name: "Pink", value: "#ff2d55" }
-];
-
-const ENHANCE_STYLES = [
-  { id: "digital", label: "Digital Art", promptSuffix: "Clean digital art, detailed, professional vector, smooth gradients" },
-  { id: "sketch", label: "Pencil Sketch", promptSuffix: "Hand-drawn pencil sketch, graphite, fine details, shaded, textured paper" },
-  { id: "oil", label: "Oil Painting", promptSuffix: "Rich oil painting, textured canvas, heavy brushstrokes, classical masterpiece" },
-  { id: "anime", label: "Anime Style", promptSuffix: "Beautiful anime illustration, studio quality, vibrant colors, clean line art" },
-  { id: "watercolor", label: "Watercolor", promptSuffix: "Soft watercolor painting, color splashes, bleeding ink, beautiful wash, artistic" },
-  { id: "render", label: "3D Render", promptSuffix: "Stunning 3D clay render, Octane render, photorealistic, cinematic lighting, cute model" },
-  { id: "cyberpunk", label: "Cyberpunk", promptSuffix: "Cyberpunk aesthetic, neon glow, futuristic cities, synthwave colors, dark atmospheric" }
-];
-
-const STYLE_ICONS: Record<string, React.ReactNode> = {
-  digital: <Palette size={14} />,
-  sketch: <Pencil size={14} />,
-  oil: <Paintbrush size={14} />,
-  anime: <Zap size={14} />,
-  watercolor: <Flame size={14} />,
-  render: <Box size={14} />,
-  cyberpunk: <Laptop size={14} />
-};
-
 type ToolbarProps = {
   collaboration?: {
     emitDraw: (element: WhiteboardElement) => void;
@@ -116,15 +78,7 @@ type ToolbarProps = {
 };
 
 export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isViewer = false }: ToolbarProps) {
-  const [isEnhancing, setIsEnhancing] = useState(false);
-  const [enhanceProgress, setEnhanceProgress] = useState(0);
-  const [enhanceError, setEnhanceError] = useState<string | null>(null);
-  const [timer, setTimer] = useState(0);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
-  
-  const [selectedStyle, setSelectedStyle] = useState(ENHANCE_STYLES[0]);
-  const [showStyleMenu, setShowStyleMenu] = useState(false);
-
+  const [imageError, setImageError] = useState<string | null>(null);
   const [isAiImageModalOpen, setIsAiImageModalOpen] = useState(false);
   const [modalPrompt, setModalPrompt] = useState("");
   const [modalSketchBase64, setModalSketchBase64] = useState<string | undefined>(undefined);
@@ -133,15 +87,11 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
 
   const [isMoreOpen, setIsMoreOpen] = useState(false);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const moreDropdownRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent | TouchEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowStyleMenu(false);
-      }
       if (moreDropdownRef.current && !moreDropdownRef.current.contains(event.target as Node)) {
         setIsMoreOpen(false);
       }
@@ -154,20 +104,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
     };
   }, []);
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isEnhancing) {
-      setTimer(30);
-      interval = setInterval(() => {
-        setTimer((prev) => (prev > 0 ? prev - 1 : 0));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isEnhancing]);
-
   const strokeColor = useBoardStore((state) => state.strokeColor);
-  const theme = useBoardStore((state) => state.theme);
-  const setStrokeColor = useBoardStore((state) => state.setStrokeColor);
   const selectedElementId = useBoardStore((state) => state.selectedElementId);
   const selectedElementIds = useBoardStore((state) => state.selectedElementIds);
   const tool = useBoardStore((state) => state.tool);
@@ -178,7 +115,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
   const setIsLocked = useBoardStore((state) => state.setIsLocked);
   const isPropertiesOpen = useBoardStore((state) => state.isPropertiesOpen);
   const togglePropertiesOpen = useBoardStore((state) => state.togglePropertiesOpen);
-  const clearBoard = useBoardStore((state) => state.clearBoard);
 
   useEffect(() => {
     if (isViewer && tool !== "select" && tool !== "pan") {
@@ -188,55 +124,67 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
 
   const isToolDisabled = (toolId: string) => isViewer && toolId !== "select" && toolId !== "pan";
 
-  // A6.4: Image Tool upload handler
-  const handleImageFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    event.target.value = "";
+    if (!file || isViewer || isLocked) return;
+
+    setImageError(null);
+    if (file.size > 8 * 1024 * 1024) {
+      setImageError("Choose an image smaller than 8 MB.");
+      return;
+    }
 
     const reader = new FileReader();
-    reader.onload = async (e) => {
-      const dataUrl = e.target?.result as string;
-      if (!dataUrl) return;
+    reader.onerror = () => setImageError("Could not read the image.");
+    reader.onload = async () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== "string") return;
 
+      const image = new Image();
+      image.src = dataUrl;
       try {
-        let finalUrl = dataUrl;
-        try {
-          const uploadRes = await uploadImage(dataUrl);
-          if (uploadRes?.url) {
-            finalUrl = resolveImageUrl(uploadRes.url);
-          }
-        } catch {
-          // Fall back to direct data URL if server upload endpoint is unavailable
-        }
-
-        const { viewport } = useBoardStore.getState();
-        const worldX = -viewport.x / viewport.zoom + 150;
-        const worldY = -viewport.y / viewport.zoom + 150;
-
-        const imageElement: WhiteboardElement = {
-          id: crypto.randomUUID(),
-          type: "image",
-          x: worldX,
-          y: worldY,
-          width: 320,
-          height: 240,
-          strokeColor: "#ffffff",
-          strokeWidth: 1,
-          imageUrl: finalUrl,
-          points: []
-        };
-
-        const nextElements = [...useBoardStore.getState().elements, imageElement];
-        commitElements(nextElements);
-        collaboration?.emitDraw(imageElement);
-        setTool("select");
-        selectElement(imageElement.id);
-      } catch (err) {
-        console.error("Failed to load image", err);
+        await image.decode();
+      } catch {
+        setImageError("Could not open this image. Choose a PNG, JPEG, WebP, GIF, or SVG file.");
+        return;
       }
+
+      let finalUrl = dataUrl;
+      try {
+        finalUrl = (await uploadImage(dataUrl)).url;
+      } catch (error) {
+        const status = (error as { status?: number })?.status;
+        if (status && status < 500) {
+          setImageError(error instanceof Error ? error.message : "Could not upload the image.");
+          return;
+        }
+        // Keep the image on the canvas if offline. Autosave uploads it after reconnect.
+      }
+
+      const state = useBoardStore.getState();
+      if (state.isLocked) return;
+      const { viewport } = state;
+      const scale = Math.min(320 / image.naturalWidth, 240 / image.naturalHeight);
+      const imageElement: WhiteboardElement = {
+        id: crypto.randomUUID(),
+        type: "image",
+        x: -viewport.x / viewport.zoom + 150,
+        y: -viewport.y / viewport.zoom + 150,
+        width: image.naturalWidth * scale,
+        height: image.naturalHeight * scale,
+        strokeColor: "#ffffff",
+        strokeWidth: 1,
+        imageUrl: finalUrl,
+        points: []
+      };
+
+      commitElements([...state.elements, imageElement]);
+      collaboration?.emitDraw(imageElement);
+      setTool("select");
+      selectElement(imageElement.id);
     };
     reader.readAsDataURL(file);
-    event.target.value = "";
   };
 
   const handleEnhance = () => {
@@ -245,13 +193,14 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       ? selectedElementIds
       : (selectedElementId ? [selectedElementId] : []);
 
-    const targetElements = pickSketchElements(elements, activeSelectedIds);
+    const selection = pickSketchElements(elements, activeSelectedIds);
+    const targetElements = selection.some((el) => el.type !== "text" && el.type !== "sticky") ? selection : [];
     // The cluster rule was used when the sketch is not (part of) the selection, for example because
     // only a picture was selected.
     const selectedIdSet = new Set(activeSelectedIds);
     const isClusterUsed = targetElements.length > 0 && !targetElements.some((el) => selectedIdSet.has(el.id));
 
-    let detectedPrompt = "";
+    let detectedPrompt = selection.find((el) => activeSelectedIds.includes(el.id) && el.text?.trim())?.text?.trim() ?? "";
     let sketchBase64: string | undefined = undefined;
     let bounds: { x: number; y: number; width: number; height: number } | null = null;
 
@@ -293,7 +242,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           el.text?.trim()
       );
 
-      if (textElements.length > 0 && bounds) {
+      if (!detectedPrompt && textElements.length > 0 && bounds) {
         const clusterCenter = {
           x: bounds.x + bounds.width / 2,
           y: bounds.y + bounds.height / 2
@@ -367,13 +316,6 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
     selectElement(imgEl.id);
   };
 
-  const handleColorChange = (color: string) => {
-    setStrokeColor(color);
-    if (tool === "select" && selectedElementIds.length > 0) {
-      collaboration?.emitReplace(useBoardStore.getState().elements);
-    }
-  };
-
   return (
     <>
       <input
@@ -385,7 +327,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
       />
 
       <nav className="top-toolbar" aria-label="Drawing tools and controls">
-        {/* Desktop View (> 1024px) */}
+        {/* Desktop View */}
         <div className="toolbar-desktop-view">
           <button
             className={`tool-button ${isLocked ? "active" : ""}`}
@@ -450,64 +392,10 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
 
           <div className="menu-divider" style={{ width: "1px", height: "24px", margin: "0 4px", background: "rgba(255,255,255,0.1)" }} />
 
-          {/* AI Enhancer and Style Selector */}
-          <div className="ai-enhancer-group" ref={dropdownRef}>
-            <button
-              className={`ai-trigger-button ${isEnhancing ? "enhancing" : ""}`}
-              onClick={handleEnhance}
-              disabled={isEnhancing}
-              title={`Enhance sketch with AI (${selectedStyle.label})`}
-              aria-label={`Enhance sketch with AI using ${selectedStyle.label}`}
-            >
-              <Sparkles size={14} className="ai-sparkle-icon" />
-              <span className="ai-btn-text">Enhance</span>
-              <span className="ai-style-pill">{selectedStyle.label}</span>
-            </button>
-
-            <button
-              className={`ai-dropdown-trigger ${showStyleMenu ? "active" : ""}`}
-              disabled={isEnhancing}
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowStyleMenu(!showStyleMenu);
-              }}
-              title="Select AI Art Style Preset"
-              aria-label="Select AI Art Style Preset"
-              aria-expanded={showStyleMenu}
-            >
-              <ChevronDown size={13} className={`chevron-icon ${showStyleMenu ? "rotate" : ""}`} />
-            </button>
-
-            {showStyleMenu && (
-              <div className="style-dropdown-menu" role="menu" aria-label="AI Style presets">
-                <div className="style-dropdown-header">AI Art Style Preset</div>
-                <div className="style-dropdown-list">
-                  {ENHANCE_STYLES.map((style) => {
-                    const isSelected = selectedStyle.id === style.id;
-                    return (
-                      <button
-                        key={style.id}
-                        className={`style-dropdown-item ${isSelected ? "active" : ""}`}
-                        onClick={() => {
-                          setSelectedStyle(style);
-                          setShowStyleMenu(false);
-                        }}
-                        role="menuitem"
-                        aria-label={style.label}
-                      >
-                        <span className="style-icon">{STYLE_ICONS[style.id]}</span>
-                        <div className="style-info">
-                          <span className="style-name">{style.label}</span>
-                          <span className="style-desc">{style.promptSuffix.split(",")[0]}</span>
-                        </div>
-                        {isSelected && <Check size={14} className="style-check-icon" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          <button className="tool-button" onClick={handleEnhance} disabled={isViewer}
+            title="Generate image" aria-label="Generate image">
+            <Wand2 size={17} />
+          </button>
 
           {/* Templates gallery button */}
           <button
@@ -523,15 +411,14 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           <button
             className="tool-button"
             onClick={onOpenAiDiagram}
-            title="AI Prompt → Editable Diagram"
+            title="Create diagram"
             aria-label="Generate editable diagram from text prompt"
-            style={{ color: "#a5b4fc" }}
           >
             <Workflow size={16} />
           </button>
         </div>
 
-        {/* Mobile & Tablet View (<= 1024px) */}
+        {/* Compact View */}
         <div className="toolbar-mobile-view">
           {PRIMARY_TOOLS.map((option) => (
             <button
@@ -671,7 +558,7 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
                     aria-label="AI Prompt to Diagram"
                   >
                     <Workflow size={15} />
-                    <span>AI Diagram</span>
+                    <span>Create diagram</span>
                   </button>
 
                   <button
@@ -680,11 +567,11 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
                       handleEnhance();
                       setIsMoreOpen(false);
                     }}
-                    disabled={isEnhancing}
-                    aria-label="Enhance sketch with AI"
+                    disabled={isViewer}
+                    aria-label="Generate image"
                   >
-                    <Sparkles size={15} />
-                    <span>AI Enhance</span>
+                    <Wand2 size={15} />
+                    <span>Generate image</span>
                   </button>
                 </div>
               </div>
@@ -693,77 +580,8 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
         </div>
       </nav>
 
-      {/* Single clean floating progress toast below the toolbar */}
-      {isEnhancing && (
-        <div
-          style={{
-            position: "fixed",
-            top: "68px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "rgba(18, 18, 26, 0.95)",
-            backdropFilter: "blur(16px)",
-            WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(168, 85, 247, 0.4)",
-            padding: "10px 16px",
-            borderRadius: "14px",
-            zIndex: 120,
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-            width: "300px",
-            maxWidth: "calc(100vw - 32px)",
-            boxShadow: "0 16px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(124, 58, 237, 0.2)",
-            animation: "slideDownMenu 0.2s cubic-bezier(0.16, 1, 0.3, 1)"
-          }}
-          role="status"
-          aria-live="polite"
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Sparkles size={14} className="enhancing" style={{ color: "#d946ef" }} />
-              <span style={{ fontSize: "12px", fontWeight: 700, color: "#fff" }}>
-                AI Refining Sketch
-              </span>
-            </div>
-            <span style={{ fontSize: "11px", color: "#d8b4fe", fontWeight: 700 }}>
-              {enhanceProgress > 0 ? `${enhanceProgress}%` : `~${timer}s`}
-            </span>
-          </div>
-
-          <div style={{ width: "100%", height: "4px", background: "rgba(255, 255, 255, 0.1)", borderRadius: "2px", overflow: "hidden" }}>
-            <div
-              style={{
-                width: `${enhanceProgress > 0 ? enhanceProgress : ((30 - timer) / 30) * 100}%`,
-                height: "100%",
-                background: "#6366f1",
-                borderRadius: "2px",
-                transition: "width 0.4s ease"
-              }}
-            />
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "10px", color: "#9ca3af" }}>
-            <span>Style: {selectedStyle.label}</span>
-            <button
-              onClick={() => setIsEnhancing(false)}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#6b7280",
-                fontSize: "10px",
-                cursor: "pointer",
-                padding: "0 2px"
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Floating error notification below toolbar */}
-      {enhanceError && (
+      {imageError && (
         <div
           style={{
             position: "fixed",
@@ -787,7 +605,8 @@ export function Toolbar({ collaboration, onOpenTemplates, onOpenAiDiagram, isVie
           }}
           role="alert"
         >
-          <span>{enhanceError}</span>
+          <span>{imageError}</span>
+          <button type="button" aria-label="Dismiss image error" onClick={() => setImageError(null)}><X size={16} /></button>
         </div>
       )}
 

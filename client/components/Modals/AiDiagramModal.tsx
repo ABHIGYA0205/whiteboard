@@ -141,7 +141,7 @@ export function AiDiagramModal({ isOpen, onClose, collaboration }: AiDiagramModa
           borderRadius: "20px",
           width: "100%",
           maxWidth: "600px",
-          padding: "32px",
+          padding: "clamp(14px, 4vw, 32px)",
           boxShadow: isLight
             ? "0 25px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)"
             : "0 30px 80px rgba(0, 0, 0, 0.8)",
@@ -153,6 +153,7 @@ export function AiDiagramModal({ isOpen, onClose, collaboration }: AiDiagramModa
           transition: "all 0.2s ease"
         }}
         onClick={(e) => e.stopPropagation()}
+        className="editor-dialog"
         role="dialog"
         aria-label="AI Diagram Architect"
         aria-modal="true"
@@ -295,7 +296,7 @@ export function AiDiagramModal({ isOpen, onClose, collaboration }: AiDiagramModa
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 120px), 1fr))",
                 gap: "8px"
               }}
             >
